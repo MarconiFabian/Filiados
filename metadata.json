@@ -1,0 +1,12 @@
+{
+  "name": "ML Afiliados Pro",
+  "description": "Gerador de anúncios profissionais para afiliados do Mercado Livre com captura automática e compartilhamento direto para WhatsApp.",
+  "requestFramePermissions": [
+    "clipboard-read",
+    "clipboard-write"
+  ],
+  "majorCapabilities": [
+    "AI-powered automation",
+    "Real-time marketing tools"
+  ]
+}
