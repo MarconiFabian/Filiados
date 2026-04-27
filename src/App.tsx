@@ -151,9 +151,13 @@ export default function App() {
     try {
       await signInWithPopup(auth, provider);
       toast.success("Login realizado com sucesso!");
-    } catch (err) {
+    } catch (err: any) {
+      if (err.code === 'auth/popup-closed-by-user') {
+        // Usuário fechou a janela, não precisa mostrar erro "assustador"
+        return;
+      }
       console.error(err);
-      toast.error("Erro ao fazer login.");
+      toast.error("Erro ao fazer login. Verifique se o domínio está autorizado no Firebase.");
     }
   };
 
