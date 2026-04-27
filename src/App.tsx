@@ -147,17 +147,27 @@ export default function App() {
   }, [user]);
 
   const handleLogin = async () => {
+    console.log("Iniciando processo de login...");
     const provider = new GoogleAuthProvider();
     try {
-      await signInWithPopup(auth, provider);
+      const result = await signInWithPopup(auth, provider);
+      console.log("Login bem sucedido:", result.user.email);
       toast.success("Login realizado com sucesso!");
     } catch (err: any) {
+      console.error("Erro detalhado do Firebase:", err);
+      
       if (err.code === 'auth/popup-closed-by-user') {
-        // Usuário fechou a janela, não precisa mostrar erro "assustador"
         return;
       }
-      console.error(err);
-      toast.error("Erro ao fazer login. Verifique se o domínio está autorizado no Firebase.");
+      
+      // Se o erro for de domínio não autorizado, vamos avisar explicitamente
+      if (err.message?.includes('unauthorized-domain') || err.code === 'auth/unauthorized-domain') {
+        alert("ERRO DE DOMÍNIO: Você precisa adicionar este site na lista de 'Domínios Autorizados' no Console do Firebase (Authentication > Settings).");
+      } else {
+        alert("Erro ao entrar: " + (err.message || "Erro desconhecido"));
+      }
+      
+      toast.error("Erro ao fazer login.");
     }
   };
 
