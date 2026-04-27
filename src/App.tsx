@@ -147,8 +147,10 @@ export default function App() {
   }, [user]);
 
   const handleLogin = async () => {
-    console.log("Iniciando processo de login...");
+    // Importante: A chamada ao Firebase deve ser o mais próxima possível do clique do usuário
+    // para evitar que o navegador bloqueie o popup.
     const provider = new GoogleAuthProvider();
+    
     try {
       const result = await signInWithPopup(auth, provider);
       console.log("Login bem sucedido:", result.user.email);
@@ -159,12 +161,18 @@ export default function App() {
       if (err.code === 'auth/popup-closed-by-user') {
         return;
       }
+
+      if (err.code === 'auth/popup-blocked') {
+        alert("🚨 POP-UP BLOQUEADO: O seu navegador impediu a janela de login de abrir.\n\nPor favor, procure um ícone de bloqueio na barra de endereços (perto da estrela de favoritos) e escolha 'SEMPRE PERMITIR pop-ups' para este site.\n\nDepois disso, clique em Entrar novamente.");
+        return;
+      }
       
-      // Se o erro for de domínio não autorizado, vamos avisar explicitamente
+      // Se o erro for de domínio não autorizado
       if (err.message?.includes('unauthorized-domain') || err.code === 'auth/unauthorized-domain') {
-        alert("ERRO DE DOMÍNIO: Você precisa adicionar este site na lista de 'Domínios Autorizados' no Console do Firebase (Authentication > Settings).");
+        const currentDomain = window.location.hostname;
+        alert("🚨 DOMÍNIO NÃO AUTORIZADO: Você precisa adicionar '" + currentDomain + "' no Firebase.\n\n1. Vá no Firebase Console\n2. Authentication > Settings > Authorized Domains\n3. Clique em 'Add domain' e cole: " + currentDomain);
       } else {
-        alert("Erro ao entrar: " + (err.message || "Erro desconhecido"));
+        alert("Erro ao entrar: " + (err.code || err.message));
       }
       
       toast.error("Erro ao fazer login.");
