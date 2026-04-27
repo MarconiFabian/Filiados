@@ -23,13 +23,36 @@ import {
   Smartphone,
   Sparkles,
   MousePointerClick,
-  X
+  X,
+  LogOut,
+  LogIn
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { GoogleGenAI } from "@google/genai";
 import { toast, Toaster } from 'react-hot-toast';
+import { auth, db } from './lib/firebase';
+import { 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  signOut, 
+  onAuthStateChanged,
+  User 
+} from 'firebase/auth';
+import { 
+  doc, 
+  setDoc, 
+  getDoc, 
+  collection, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  addDoc, 
+  deleteDoc, 
+  updateDoc,
+  serverTimestamp 
+} from 'firebase/firestore';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
@@ -52,6 +75,8 @@ interface Product {
 const STORAGE_KEY = 'ml_afiliados_v1';
 
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [inputUrl, setInputUrl] = useState('');
@@ -59,7 +84,7 @@ export default function App() {
   const [isCopied, setIsCopied] = useState(false);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
-  const [shareStep, setShareStep] = useState(1); // 1: Texto, 2: Foto
+  const [shareStep, setShareStep] = useState(1);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [globalSettings, setGlobalSettings] = useState({
     groupLink: 'https://divulgador.app/sua-bio',
@@ -67,20 +92,85 @@ export default function App() {
     affiliateId: '',
   });
 
-  // Load from local storage
+  // Auth State
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const data = JSON.parse(saved);
-      setProducts(data.products || []);
-      setGlobalSettings(data.settings || { groupLink: 'https://divulgador.app/sua-bio', defaultCoupon: '', affiliateId: '' });
-    }
+    return onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+    });
   }, []);
 
-  // Save to local storage
+  // Load user settings and products from Firebase
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ products, settings: globalSettings }));
-  }, [products, globalSettings]);
+    if (!user) {
+      setProducts([]);
+      return;
+    }
+
+    // Sync settings
+    const userDocRef = doc(db, 'users', user.uid);
+    const unsubSettings = onSnapshot(userDocRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setGlobalSettings({
+          groupLink: data.groupLink || 'https://divulgador.app/sua-bio',
+          defaultCoupon: data.defaultCoupon || '',
+          affiliateId: data.affiliateId || '',
+        });
+      } else {
+        // Init user settings if new
+        setDoc(userDocRef, {
+          email: user.email,
+          groupLink: 'https://divulgador.app/sua-bio',
+          defaultCoupon: '',
+          affiliateId: '',
+          createdAt: serverTimestamp()
+        });
+      }
+    });
+
+    // Sync products
+    const productsRef = collection(db, 'users', user.uid, 'products');
+    const q = query(productsRef, orderBy('addedAt', 'desc'));
+    const unsubProducts = onSnapshot(q, (snap) => {
+      const prods: Product[] = [];
+      snap.forEach(doc => {
+        prods.push({ id: doc.id, ...doc.data() } as Product);
+      });
+      setProducts(prods);
+    });
+
+    return () => {
+      unsubSettings();
+      unsubProducts();
+    };
+  }, [user]);
+
+  const handleLogin = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+      toast.success("Login realizado com sucesso!");
+    } catch (err) {
+      console.error(err);
+      toast.error("Erro ao fazer login.");
+    }
+  };
+
+  const handleLogout = () => {
+    signOut(auth);
+    toast.success("Sessão encerrada.");
+  };
+
+  const saveSettings = async (updates: any) => {
+    if (!user) return;
+    try {
+      await setDoc(doc(db, 'users', user.uid), updates, { merge: true });
+      toast.success("Configurações salvas!");
+    } catch (err) {
+      toast.error("Erro ao salvar configurações.");
+    }
+  };
 
   const selectedProduct = products.find(p => p.id === selectedProductId);
 
@@ -92,8 +182,8 @@ export default function App() {
       
       if (data.error) throw new Error(data.error);
 
-      const newProduct: Product = {
-        id: Math.random().toString(36).substring(7),
+      const newProductData = {
+        userId: user!.uid,
         title: data.title || 'Produto sem título',
         image: data.image || '',
         price: data.price || '0,00',
@@ -104,8 +194,7 @@ export default function App() {
         addedAt: Date.now(),
       };
 
-      setProducts(prev => [newProduct, ...prev]);
-      setSelectedProductId(newProduct.id);
+      await addDoc(collection(db, 'users', user!.uid, 'products'), newProductData);
       setInputUrl('');
     } catch (err) {
       alert('Erro ao buscar produto. Tente novamente.');
@@ -114,13 +203,23 @@ export default function App() {
     }
   };
 
-  const updateProduct = (id: string, updates: Partial<Product>) => {
-    setProducts(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
+  const updateProduct = async (id: string, updates: Partial<Product>) => {
+    if (!user) return;
+    try {
+      await updateDoc(doc(db, 'users', user.uid, 'products', id), updates);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
-  const deleteProduct = (id: string) => {
-    setProducts(prev => prev.filter(p => p.id !== id));
-    if (selectedProductId === id) setSelectedProductId(null);
+  const deleteProduct = async (id: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'users', user.uid, 'products', id));
+      if (selectedProductId === id) setSelectedProductId(null);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const openAffiliateLinkBuilder = () => {
@@ -274,7 +373,7 @@ export default function App() {
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [bulkInput, setBulkInput] = useState('');
 
-  const handleBulkImport = (inputOverride?: string) => {
+  const handleBulkImport = async (inputOverride?: string) => {
     const rawInput = inputOverride || bulkInput;
     if (typeof rawInput !== 'string') return;
     
@@ -284,22 +383,24 @@ export default function App() {
     try {
       // Try to parse as JSON (from bookmarklet)
       const data = JSON.parse(input);
-      if (Array.isArray(data)) {
-        const newProducts = data.map((item: any) => ({
-          id: Math.random().toString(36).substring(7),
-          title: item.title || 'Produto sem título',
-          image: item.image || '',
-          price: item.price || '0,00',
-          originalPrice: item.originalPrice || '',
-          coupon: item.coupon || globalSettings.defaultCoupon,
-          link: item.link || '',
-          groupLink: globalSettings.groupLink,
-          addedAt: Date.now(),
-        }));
-        setProducts(prev => [...newProducts, ...prev]);
+      if (Array.isArray(data) && user) {
+        const batchPromises = data.map((item: any) => 
+          addDoc(collection(db, 'users', user.uid, 'products'), {
+            userId: user.uid,
+            title: item.title || 'Produto sem título',
+            image: item.image || '',
+            price: item.price || '0,00',
+            originalPrice: item.originalPrice || '',
+            coupon: item.coupon || globalSettings.defaultCoupon,
+            link: item.link || '',
+            groupLink: globalSettings.groupLink,
+            addedAt: Date.now(),
+          })
+        );
+        await Promise.all(batchPromises);
         setIsBulkModalOpen(false);
         setBulkInput('');
-        toast.success(`${newProducts.length} produtos importados!`);
+        toast.success(`${data.length} produtos importados!`);
       }
     } catch (e) {
       // If not JSON, try to treat as list of links
@@ -324,6 +425,53 @@ export default function App() {
       handleBulkImport(bulkInput);
     }
   }, [bulkInput]);
+
+  if (authLoading) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-4">
+          <Zap className="text-blue-600 animate-pulse" size={48} />
+          <p className="text-sm font-black text-slate-400 uppercase tracking-widest">Iniciando Sistema...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-[#FFE600] p-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-white p-12 rounded-[40px] shadow-2xl max-w-md w-full text-center space-y-8"
+        >
+          <div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-blue-200">
+            <Zap className="text-white fill-white" size={40} />
+          </div>
+          <div>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight leading-tight">ML Afiliados Pro</h1>
+            <p className="text-slate-500 font-medium mt-2">Plataforma Ninja para Consultores de Ofertas Mercado Livre.</p>
+          </div>
+          <button 
+            onClick={handleLogin}
+            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl shadow-slate-200"
+          >
+            <LogIn size={24} /> Entrar com Google
+          </button>
+          <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
+             <div className="text-left">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Multi-Usuário</p>
+                <p className="text-[11px] font-bold text-slate-600">Seus dados salvos na nuvem.</p>
+             </div>
+             <div className="text-left">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Script Ninja</p>
+                <p className="text-[11px] font-bold text-slate-600">Capture ofertas com um clique.</p>
+             </div>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden font-sans text-slate-800 selection:bg-yellow-400 selection:text-black">
@@ -473,10 +621,10 @@ export default function App() {
             <Download size={14} /> Importar em Massa
           </button>
           <button 
-            onClick={() => setIsSettingsOpen(true)}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-blue-700 transition-all flex items-center gap-2"
+            onClick={handleLogout}
+            className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-black transition-all flex items-center gap-2"
           >
-            <Settings size={14} /> Configurações
+            <LogOut size={14} /> Sair
           </button>
         </div>
       </header>
@@ -838,7 +986,7 @@ export default function App() {
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Sistema Pronto
           </span>
           <span className="hidden sm:inline">Automação: <b className="text-slate-800">Mercado Livre (Ativa)</b></span>
-          <span className="hidden lg:inline">Sessão: <b className="text-blue-600">marconifabiano@gmail.com</b></span>
+          <span className="hidden lg:inline">Usuário: <b className="text-blue-600 lowercase">{user.email}</b></span>
         </div>
         <div className="flex gap-4">
           <span>v2.8.5 (Gold Edition)</span>

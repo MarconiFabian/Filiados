@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "users": {
+      "title": "User",
+      "description": "System user with global settings.",
+      "type": "object",
+      "properties": {
+        "groupLink": { "type": "string" },
+        "defaultCoupon": { "type": "string" },
+        "affiliateId": { "type": "string" },
+        "email": { "type": "string" }
+      },
+      "required": ["email", "groupLink"]
+    },
+    "products": {
+      "title": "Product",
+      "description": "Scraped product from ML.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "image": { "type": "string" },
+        "price": { "type": "string" },
+        "originalPrice": { "type": "string" },
+        "coupon": { "type": "string" },
+        "link": { "type": "string" },
+        "groupLink": { "type": "string" },
+        "addedAt": { "type": "number" }
+      },
+      "required": ["userId", "title", "link", "addedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User profile and settings."
+    },
+    "/users/{userId}/products/{productId}": {
+      "schema": "products",
+      "description": "Products belonging to a user."
+    }
+  }
+}
