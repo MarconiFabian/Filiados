@@ -52,8 +52,8 @@ async function startServer() {
       });
       const $ = cheerio.load(response.data);
       
-      const title = $('meta[property="og:title"]').attr('content') || $('title').text();
-      const image = $('meta[property="og:image"]').attr('content');
+      const title = $('.ui-pdp-title').text().trim() || $('meta[property="og:title"]').attr('content') || $('title').text().trim();
+      const image = $('.ui-pdp-image').attr('data-zoom') || $('.ui-pdp-image').attr('src') || $('meta[property="og:image"]').attr('content');
       
       // Attempt to find price in standard ML patterns
       let price = "";
@@ -63,11 +63,27 @@ async function startServer() {
       
       $('.andes-money-amount').each((i, el) => {
         const $el = $(el);
-        // Evitar pegar preços de parcelamento (geralmente menores ou em contextos específicos)
         if ($el.closest('.ui-pdp-installments, .ui-search-installments').length > 0) return;
         
-        const fraction = $el.find('.andes-money-amount__fraction').text().trim().replace(/[^0-9]/g, '');
-        const cents = $el.find('.andes-money-amount__cents').text().trim().replace(/[^0-9]/g, '');
+        // ML frequently uses separate elements for fraction and cents
+        let fraction = $el.find('.andes-money-amount__fraction').text().trim().replace(/[^0-9]/g, '');
+        let cents = $el.find('.andes-money-amount__cents').text().trim().replace(/[^0-9]/g, '');
+        
+        // If we don't find the fraction element, try to parse from the main text
+        if (!fraction) {
+           const fullText = $el.text().trim();
+           // Matches things like 29,90 or 29.90
+           const match = fullText.match(/(\d+)[,\.](\d{2})/);
+           if (match) {
+             fraction = match[1];
+             cents = match[2];
+           } else {
+             // If no decimal, matching just numbers
+             fraction = fullText.replace(/[^0-9]/g, '');
+             cents = "00";
+           }
+        }
+        
         const isPrevious = $el.hasClass('andes-money-amount--previous') || $el.closest('.ui-pdp-price__old').length > 0;
         
         if (fraction) {

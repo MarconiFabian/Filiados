@@ -21,7 +21,9 @@ import {
   Zap,
   Info,
   Smartphone,
-  Sparkles
+  Sparkles,
+  MousePointerClick,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -58,9 +60,11 @@ export default function App() {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [shareStep, setShareStep] = useState(1); // 1: Texto, 2: Foto
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [globalSettings, setGlobalSettings] = useState({
     groupLink: 'https://divulgador.app/sua-bio',
     defaultCoupon: '',
+    affiliateId: '',
   });
 
   // Load from local storage
@@ -69,7 +73,7 @@ export default function App() {
     if (saved) {
       const data = JSON.parse(saved);
       setProducts(data.products || []);
-      setGlobalSettings(data.settings || { groupLink: 'https://divulgador.app/sua-bio', defaultCoupon: '' });
+      setGlobalSettings(data.settings || { groupLink: 'https://divulgador.app/sua-bio', defaultCoupon: '', affiliateId: '' });
     }
   }, []);
 
@@ -117,6 +121,12 @@ export default function App() {
   const deleteProduct = (id: string) => {
     setProducts(prev => prev.filter(p => p.id !== id));
     if (selectedProductId === id) setSelectedProductId(null);
+  };
+
+  const openAffiliateLinkBuilder = () => {
+    if (!selectedProduct) return;
+    window.open(`https://www.mercadolivre.com.br/afiliados/links`, '_blank');
+    toast.success("Abrindo Painel de Afiliados...", { icon: '🔗' });
   };
 
   const formatText = (p: Product) => {
@@ -264,10 +274,16 @@ export default function App() {
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [bulkInput, setBulkInput] = useState('');
 
-  const handleBulkImport = () => {
+  const handleBulkImport = (inputOverride?: string) => {
+    const rawInput = inputOverride || bulkInput;
+    if (typeof rawInput !== 'string') return;
+    
+    const input = rawInput.trim();
+    if (!input) return;
+
     try {
       // Try to parse as JSON (from bookmarklet)
-      const data = JSON.parse(bulkInput);
+      const data = JSON.parse(input);
       if (Array.isArray(data)) {
         const newProducts = data.map((item: any) => ({
           id: Math.random().toString(36).substring(7),
@@ -275,7 +291,7 @@ export default function App() {
           image: item.image || '',
           price: item.price || '0,00',
           originalPrice: item.originalPrice || '',
-          coupon: globalSettings.defaultCoupon,
+          coupon: item.coupon || globalSettings.defaultCoupon,
           link: item.link || '',
           groupLink: globalSettings.groupLink,
           addedAt: Date.now(),
@@ -283,24 +299,107 @@ export default function App() {
         setProducts(prev => [...newProducts, ...prev]);
         setIsBulkModalOpen(false);
         setBulkInput('');
+        toast.success(`${newProducts.length} produtos importados!`);
       }
     } catch (e) {
       // If not JSON, try to treat as list of links
-      const links = bulkInput.split('\n').map(l => l.trim()).filter(l => l.startsWith('http'));
+      const links = input.split('\n').map(l => l.trim()).filter(l => l.startsWith('http'));
       if (links.length > 0) {
-        alert(`Importando ${links.length} links um por um...`);
-        links.forEach(link => fetchProduct(link));
-        setIsBulkModalOpen(false);
-        setBulkInput('');
-      } else {
-        alert('Formato inválido. Cole o JSON do bookmarklet ou uma lista de links.');
+        toast.loading(`Importando ${links.length} produtos...`, { id: 'bulk-load' });
+        Promise.all(links.map(link => fetchProduct(link))).then(() => {
+          toast.success('Importação concluída!', { id: 'bulk-load' });
+          setIsBulkModalOpen(false);
+          setBulkInput('');
+        }).catch(() => {
+          toast.error('Erro em alguns links.', { id: 'bulk-load' });
+        });
+      } else if (!inputOverride) {
+        alert('Formato inválido. Cole o JSON do favorito ou links.');
       }
     }
   };
 
+  useEffect(() => {
+    if (typeof bulkInput === 'string' && bulkInput.includes('[') && bulkInput.includes(']')) {
+      handleBulkImport(bulkInput);
+    }
+  }, [bulkInput]);
+
   return (
     <div className="flex flex-col h-screen bg-slate-50 overflow-hidden font-sans text-slate-800 selection:bg-yellow-400 selection:text-black">
       <Toaster position="top-center" />
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {isSettingsOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg w-full shadow-2xl space-y-6"
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-2xl font-black text-slate-900 tracking-tight">Configurações Gerais</h2>
+                  <p className="text-slate-500 text-sm">Ajuste os dados que serão usados nos novos anúncios.</p>
+                </div>
+                <button 
+                  onClick={() => setIsSettingsOpen(false)}
+                  className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-900 transition-colors"
+                >
+                  <Plus className="rotate-45" size={24} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Link Padrão do Grupo/Bio</label>
+                  <input 
+                    type="text" 
+                    value={globalSettings.groupLink}
+                    onChange={(e) => setGlobalSettings(prev => ({ ...prev, groupLink: e.target.value }))}
+                    className="w-full text-sm p-4 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                    placeholder="https://chat.whatsapp.com/..."
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Cupom Padrão (Opcional)</label>
+                  <input 
+                    type="text" 
+                    value={globalSettings.defaultCoupon}
+                    onChange={(e) => setGlobalSettings(prev => ({ ...prev, defaultCoupon: e.target.value }))}
+                    className="w-full text-sm p-4 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                    placeholder="Ex: BEMVINDO"
+                  />
+                </div>
+
+                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
+                   <p className="text-[10px] font-black text-blue-800 uppercase tracking-widest flex items-center gap-2">
+                     <Info size={12} /> Dica de Afiliado
+                   </p>
+                   <p className="text-[11px] text-blue-700 leading-tight">
+                     O Mercado Livre não permite gerar links de afiliado automaticamente sem API paga. Use o botão <b>"Converter em Afiliado"</b> no editor para abrir o site oficial e gerar seu link.
+                   </p>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => setIsSettingsOpen(false)}
+                className="w-full py-4 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
+              >
+                Salvar Configurações
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Bulk Import Modal */}
       <AnimatePresence>
         {isBulkModalOpen && (
@@ -371,9 +470,12 @@ export default function App() {
             onClick={() => setIsBulkModalOpen(true)}
             className="hidden md:flex items-center gap-2 bg-white px-4 py-2 rounded-lg text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50 border border-slate-200 transition-all"
           >
-            <Clipboard size={14} /> Sincronizar Painel
+            <Download size={14} /> Importar em Massa
           </button>
-          <button className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-blue-700 transition-all flex items-center gap-2">
+          <button 
+            onClick={() => setIsSettingsOpen(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-blue-700 transition-all flex items-center gap-2"
+          >
             <Settings size={14} /> Configurações
           </button>
         </div>
@@ -422,105 +524,19 @@ export default function App() {
                 <div 
                   draggable
                   onDragStart={(e) => {
-                    const script = `javascript:(function(){
-                      console.log('Iniciando captura ML Pro...');
-                      const selectors = [
-                        '.ui-search-result', 
-                        '.ui-search-result__wrapper', 
-                        '.promotion-item', 
-                        '.ui-pdp-container', 
-                        '.andes-card', 
-                        '.poly-card',
-                        '.ui-search-item__group',
-                        '.ui-search-result__content'
-                      ];
-                      
-                      const items = [];
-                      document.querySelectorAll(selectors.join(',')).forEach(el => {
-                        const img = el.querySelector('img')?.src;
-                        const titleEl = el.querySelector('h1, h2, h3, .ui-search-item__title, .promotion-item__title, .poly-component__title, .ui-pdp-title');
-                        const title = titleEl ? titleEl.innerText.trim() : null;
-                        
-                        /* Seletores de preço (Atual e Antigo) */
-                        const allAmounts = Array.from(el.querySelectorAll('.andes-money-amount'));
-                        
-                        // O preço riscado sempre tem a classe andes-money-amount--previous
-                        const oldAmountEl = allAmounts.find(a => a.classList.contains('andes-money-amount--previous') || a.closest('.ui-pdp-price__old') || a.closest('.ui-search-price__part--status'));
-                        
-                        // O preço atual NÃO pode ser o previous e NÃO pode estar em blocos de parcelamento
-                        const currentAmountEl = allAmounts.find(a => 
-                          !a.classList.contains('andes-money-amount--previous') && 
-                          !a.closest('.ui-pdp-price__old') && 
-                          !a.closest('.ui-pdp-installments') && 
-                          !a.closest('.ui-search-installments') &&
-                          !a.closest('.ui-search-price__part--status')
-                        );
-                        
-                        const getPriceFromEl = (baseEl) => {
-                          if (!baseEl) return null;
-                          const fractionEl = baseEl.querySelector('.andes-money-amount__fraction');
-                          const centsEl = baseEl.querySelector('.andes-money-amount__cents');
-                          if (!fractionEl) return null;
-                          const fraction = fractionEl.innerText.replace(/[^0-9]/g, '');
-                          const cents = centsEl ? centsEl.innerText.replace(/[^0-9]/g, '') : '00';
-                          return fraction + ',' + (cents || '00');
-                        };
-
-                        let price = getPriceFromEl(currentAmountEl);
-                        let originalPrice = getPriceFromEl(oldAmountEl) || '';
-                        
-                        // Se por algum motivo pegou o mesmo preço, limpa o original
-                        if (originalPrice === price) originalPrice = '';
-                        
-                        // Fallback se não achou o preço atual mas achou um preço qualquer que não seja o riscado
-                        if (!price && allAmounts.length > 0) {
-                          const fallbackEl = allAmounts.find(a => !a.classList.contains('andes-money-amount--previous'));
-                          price = getPriceFromEl(fallbackEl);
-                        }
-
-                        /* Detecção de Cupom */
-                        let coupon = '';
-                        const couponEl = el.querySelector('.ui-pdp-promotions-pill-label, .ui-pdp-promotions__title, .ui-pdp-vpp-label');
-                        if (couponEl) {
-                          const cText = couponEl.innerText.toUpperCase();
-                          const match = cText.match(/[A-Z0-9]{4,}/);
-                          if (match) coupon = match[0];
-                        }
-                        
-                        const link = el.querySelector('a')?.href;
-                        
-                        if (title && link && price) {
-                          items.push({ 
-                            title, 
-                            image: img, 
-                            price, 
-                            originalPrice, 
-                            coupon,
-                            link 
-                          });
-                        }
-                      });
-
-                      if (items.length) {
-                        /* Deduplicar por link */
-                        const unique = Array.from(new Map(items.map(item => [item.link, item])).values());
-                        const json = JSON.stringify(unique);
-                        const copyEl = document.createElement('textarea');
-                        copyEl.value = json;
-                        document.body.appendChild(copyEl);
-                        copyEl.select();
-                        document.execCommand('copy');
-                        document.body.removeChild(copyEl);
-                        alert('🚀 SUCESSO! ' + unique.length + ' produtos capturados!\\n\\nAgora volte no app ML Afiliados e cole no campo \"Importar em Massa\".');
-                      } else {
-                        alert('⚠️ Atenção: Não encontrei produtos.\\n\\nCertifique-se de estar em uma página de pesquisa ou de um produto específico do Mercado Livre.');
-                      }
-                    })();`;
+                    const script = `javascript:(function(){const items=[];let productData=null;let interceptedLink=null;const originalExec=document.execCommand;document.execCommand=function(cmd){if(cmd==='copy'){const activeEl=document.activeElement;const val=activeEl?.value||activeEl?.innerText||'';if(val.includes('mercadolivre.com')||val.includes('meli.la')){interceptedLink=val;}}return originalExec.apply(this,arguments)};const originalWrite=navigator.clipboard.writeText;navigator.clipboard.writeText=function(text){if(text.includes('mercadolivre.com')||text.includes('meli.la')){interceptedLink=text;}return originalWrite.apply(this,arguments)};const getP=(b)=>{if(!b)return null;let f=b.querySelector('.andes-money-amount__fraction')?.innerText.replace(/[^0-9]/g,'');let c=b.querySelector('.andes-money-amount__cents')?.innerText.replace(/[^0-9]/g,'')||'00';if(!f){const t=b.innerText.trim();const m=t.match(/(\\d+)[,\\.](\\d{2})/);if(m){f=m[1];c=m[2]}else{f=t.replace(/[^0-9]/g,'');c='00';}}return f?f+','+c:null};const getI=(el)=>{const img=el.querySelector('img');if(!img)return'';return img.getAttribute('data-src')||img.getAttribute('src')||img.getAttribute('data-lazy')||img.src||'';};const scrapeProduct=()=>{const pdpT=document.querySelector('.ui-pdp-title');if(pdpT){const t=pdpT.innerText.trim();const i=getI(document.querySelector('.ui-pdp-gallery')||document);const prices=Array.from(document.querySelectorAll('.ui-pdp-price .andes-money-amount'));const cur=prices.find(a=>!a.classList.contains('andes-money-amount--previous')&&!a.closest('.ui-pdp-installments'));const old=prices.find(a=>a.classList.contains('andes-money-amount--previous'));const p=getP(cur);const o=getP(old);let cp='';const cpEl=document.querySelector('.ui-pdp-promotions-pill-label, .ui-pdp-vpp-label');if(cpEl){const m=cpEl.innerText.toUpperCase().match(/[A-Z0-9]{4,}/);if(m)cp=m[0]}if(p)return{title:t,image:i,price:p,originalPrice:o||'',coupon:cp,link:window.location.href.split('?')[0]}}return null};const finalize=()=>{const details=productData;if(details){details.link=interceptedLink||details.link;items.push(details)}const cards=document.querySelectorAll('.ui-search-result, .poly-card, .promotion-item, .andes-card, .ui-search-layout__item, .social-selling-card, .ui-search-result__wrapper');cards.forEach(c=>{const tEl=c.querySelector('.ui-search-item__title, .poly-component__title, .promotion-item__title, h2, h3, .card-title, .poly-card__title, .poly-component__title-link');if(!tEl)return;const t=tEl.innerText.trim();const img=getI(c);const prices=Array.from(c.querySelectorAll('.andes-money-amount'));const cur=prices.find(a=>!a.classList.contains('andes-money-amount--previous')&&!a.closest('.ui-search-installments'));const old=prices.find(a=>a.classList.contains('andes-money-amount--previous'));const p=getP(cur);const o=getP(old);let l=c.querySelector('a')?.href;if(l&&p)items.push({title:t,image:img,price:p,originalPrice:o||'',coupon:'',link:l})});document.execCommand=originalExec;navigator.clipboard.writeText=originalWrite;if(items.length){const unique=Array.from(new Map(items.map(it=>[it.link,it])).values());const json=JSON.stringify(unique);const el=document.createElement('textarea');el.value=json;document.body.appendChild(el);el.select();originalExec.call(document,'copy');document.body.removeChild(el);alert('🚀 PRODUTOS CAPTURADOS: '+unique.length+'\\n\\nCapturamos os valores REAIS da tela. Agora basta Colar (Ctrl+V) no app.')}else{alert('❌ Nenhum produto encontrado.')}};productData=scrapeProduct();const step2=(attempts=0)=>{const copyBtn=Array.from(document.querySelectorAll('button, span, div, li')).find(b=>b.innerText.toLowerCase().includes('copiar link'));if(copyBtn){copyBtn.click();setTimeout(finalize,600)}else if(attempts<10){setTimeout(()=>step2(attempts+1),200)}else{finalize()}};const shareBtn=Array.from(document.querySelectorAll('button, a, .social-selling-button')).find(b=>b.innerText.includes('Compartilhar')||b.innerText.includes('Ganhar')||b.className?.includes('share'));if(shareBtn&&productData){shareBtn.click();setTimeout(step2,1200)}else{finalize()}})();`;
                     e.dataTransfer.setData('text/plain', script);
+                    e.dataTransfer.setData('text/uri-list', script);
                   }}
-                  className="w-full bg-slate-900 text-yellow-400 border-2 border-dashed border-yellow-400/50 py-3 rounded-lg text-[11px] font-bold flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing hover:bg-black transition-all shadow-lg shadow-yellow-400/5"
+                  className="w-full bg-slate-900 border-2 border-dashed border-yellow-500/50 py-4 rounded-xl text-[11px] !text-yellow-500 font-bold flex items-center justify-center gap-3 cursor-grab active:cursor-grabbing hover:bg-black transition-all shadow-xl shadow-yellow-500/10 group"
                 >
-                  ⭐ FAVORITO DE CAPTURA
+                  <div className="w-8 h-8 bg-yellow-500/10 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
+                    <MousePointerClick size={16} className="text-yellow-500" />
+                  </div>
+                  <div className="flex flex-col items-start leading-tight">
+                    <span className="text-yellow-500">ARRASTE ESTE BOTÃO PARA</span>
+                    <span className="text-white opacity-60 uppercase">Sua barra de Favoritos</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -546,7 +562,13 @@ export default function App() {
                       )}
                     >
                       <div className="w-10 h-10 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0 overflow-hidden">
-                        <img src={p.image} className="w-full h-full object-contain" />
+                        {p.image ? (
+                          <img src={p.image} className="w-full h-full object-contain" alt="" />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-slate-300">
+                            <ImageIcon size={16} />
+                          </div>
+                        )}
                       </div>
                       <div className="overflow-hidden flex-1">
                         <p className={cn("text-[11px] font-bold truncate", selectedProductId === p.id ? "text-blue-600" : "text-slate-800")}>{p.title}</p>
@@ -653,15 +675,35 @@ export default function App() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Link de Afiliado</label>
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Link de Afiliado</label>
+                  {!selectedProduct.link.includes('/sec/') && !selectedProduct.link.includes('redirect') && !selectedProduct.link.includes('ml-social-selling') && !selectedProduct.link.includes('meli.la') && (
+                    <button 
+                      onClick={openAffiliateLinkBuilder}
+                      className="text-[9px] font-black uppercase text-blue-600 hover:underline flex items-center gap-1"
+                    >
+                      <Zap size={10} /> Converter em Afiliado
+                    </button>
+                  )}
+                </div>
                 <div className="relative">
                   <ExternalLink className="absolute left-4 top-4 text-slate-400" size={16} />
                   <input 
                     type="text" 
                     value={selectedProduct.link}
                     onChange={(e) => updateProduct(selectedProduct.id, { link: e.target.value })}
-                    className="w-full text-sm p-4 pl-12 border border-slate-200 rounded-xl text-slate-500 bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all truncate"
+                    className={cn(
+                      "w-full text-sm p-4 pl-12 border rounded-xl font-medium bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all truncate",
+                      !selectedProduct.link.includes('/sec/') && !selectedProduct.link.includes('redirect') && !selectedProduct.link.includes('ml-social-selling') && !selectedProduct.link.includes('meli.la')
+                        ? "border-yellow-200 text-slate-600"
+                        : "border-green-200 text-green-700 font-bold"
+                    )}
                   />
+                  {(!selectedProduct.link.includes('/sec/') && !selectedProduct.link.includes('redirect') && !selectedProduct.link.includes('ml-social-selling') && !selectedProduct.link.includes('meli.la')) && (
+                    <div className="absolute right-3 top-3.5 flex items-center gap-1 text-[9px] font-black bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full uppercase">
+                      <Info size={10} /> Link Comum
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -736,9 +778,13 @@ export default function App() {
             <div className="flex-1 p-4 pb-12 overflow-y-auto space-y-4">
               {selectedProduct ? (
                 <div className="bg-white rounded-2xl rounded-tl-none p-2 shadow-sm border-b border-black/5 animate-in fade-in slide-in-from-bottom-4 duration-300">
-                  {selectedProduct.image && (
+                  {selectedProduct.image ? (
                     <div className="w-full aspect-square bg-slate-50 rounded-xl mb-3 overflow-hidden border border-slate-100 flex items-center justify-center p-2">
-                       <img src={selectedProduct.image} className="w-full h-full object-contain" />
+                       <img src={selectedProduct.image} className="w-full h-full object-contain" alt={selectedProduct.title} />
+                    </div>
+                  ) : (
+                    <div className="w-full aspect-square bg-slate-50 rounded-xl mb-3 border border-dashed border-slate-200 flex items-center justify-center">
+                       <ImageIcon size={32} className="text-slate-300" />
                     </div>
                   )}
                   <div className="p-1 space-y-1 text-slate-800 leading-tight">
