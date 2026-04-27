@@ -94,6 +94,17 @@ export default function App() {
 
   // Auth State
   useEffect(() => {
+    import('firebase/auth').then(({ getRedirectResult }) => {
+      getRedirectResult(auth).then((result) => {
+        if (result) {
+          console.log("Login via redirect bem sucedido:", result.user.email);
+          toast.success("Login realizado!");
+        }
+      }).catch(err => {
+        console.error("Erro redirect:", err);
+      });
+    });
+
     return onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
@@ -146,37 +157,43 @@ export default function App() {
     };
   }, [user]);
 
-  const handleLogin = async () => {
-    // Importante: A chamada ao Firebase deve ser o mais próxima possível do clique do usuário
-    // para evitar que o navegador bloqueie o popup.
+  const handleLogin = (useRedirect = false) => {
     const provider = new GoogleAuthProvider();
-    
-    try {
-      const result = await signInWithPopup(auth, provider);
-      console.log("Login bem sucedido:", result.user.email);
-      toast.success("Login realizado com sucesso!");
-    } catch (err: any) {
-      console.error("Erro detalhado do Firebase:", err);
-      
-      if (err.code === 'auth/popup-closed-by-user') {
-        return;
-      }
+    provider.setCustomParameters({ prompt: 'select_account' });
 
-      if (err.code === 'auth/popup-blocked') {
-        alert("🚨 POP-UP BLOQUEADO: O seu navegador impediu a janela de login de abrir.\n\nPor favor, procure um ícone de bloqueio na barra de endereços (perto da estrela de favoritos) e escolha 'SEMPRE PERMITIR pop-ups' para este site.\n\nDepois disso, clique em Entrar novamente.");
-        return;
-      }
-      
-      // Se o erro for de domínio não autorizado
-      if (err.message?.includes('unauthorized-domain') || err.code === 'auth/unauthorized-domain') {
-        const currentDomain = window.location.hostname;
-        alert("🚨 DOMÍNIO NÃO AUTORIZADO: Você precisa adicionar '" + currentDomain + "' no Firebase.\n\n1. Vá no Firebase Console\n2. Authentication > Settings > Authorized Domains\n3. Clique em 'Add domain' e cole: " + currentDomain);
-      } else {
-        alert("Erro ao entrar: " + (err.code || err.message));
-      }
-      
-      toast.error("Erro ao fazer login.");
+    if (useRedirect) {
+      import('firebase/auth').then(({ signInWithRedirect }) => {
+        signInWithRedirect(auth, provider);
+      });
+      return;
     }
+
+    signInWithPopup(auth, provider)
+      .then((result) => {
+        console.log("Login bem sucedido:", result.user.email);
+        toast.success("Login realizado com sucesso!");
+      })
+      .catch((err: any) => {
+        console.error("Erro detalhado do Firebase:", err);
+        
+        if (err.code === 'auth/popup-closed-by-user') {
+          return;
+        }
+
+        if (err.code === 'auth/popup-blocked') {
+          alert("🚨 POP-UP BLOQUEADO!\n\n1. O navegador bloqueou a janela.\n2. Tente usar o botão 'Entrar (Alternativo)' abaixo ou permita pop-ups nas configurações do navegador.");
+          return;
+        }
+        
+        if (err.message?.includes('unauthorized-domain') || err.code === 'auth/unauthorized-domain') {
+          const currentDomain = window.location.hostname;
+          alert("🚨 DOMÍNIO NÃO AUTORIZADO: Você precisa adicionar '" + currentDomain + "' no Firebase.\n\n1. Vá no Firebase Console\n2. Authentication > Settings > Authorized Domains\n3. Clique em 'Add domain' e cole: " + currentDomain);
+        } else {
+          alert("Erro ao entrar: " + (err.code || err.message));
+        }
+        
+        toast.error("Erro ao fazer login.");
+      });
   };
 
   const handleLogout = () => {
@@ -199,8 +216,17 @@ export default function App() {
   const fetchProduct = async (url: string) => {
     setIsLoading(true);
     try {
+      console.log("Fetching product from:", url);
       const res = await fetch(`/api/scrape?url=${encodeURIComponent(url)}`);
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Server responded with error:", res.status, errorText);
+        throw new Error(`Erro no servidor: ${res.status}`);
+      }
+
       const data = await res.json();
+      console.log("Product data received:", data);
       
       if (data.error) throw new Error(data.error);
 
@@ -218,8 +244,9 @@ export default function App() {
 
       await addDoc(collection(db, 'users', user!.uid, 'products'), newProductData);
       setInputUrl('');
-    } catch (err) {
-      alert('Erro ao buscar produto. Tente novamente.');
+    } catch (err: any) {
+      console.error("Erro completo:", err);
+      alert('Erro ao buscar produto: ' + (err.message || 'Tente novamente. Verifique se o link é válido.'));
     } finally {
       setIsLoading(false);
     }
@@ -475,10 +502,17 @@ export default function App() {
             <p className="text-slate-500 font-medium mt-2">Plataforma Ninja para Consultores de Ofertas Mercado Livre.</p>
           </div>
           <button 
-            onClick={handleLogin}
+            onClick={() => handleLogin(false)}
             className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl shadow-slate-200"
           >
             <LogIn size={24} /> Entrar com Google
+          </button>
+          
+          <button 
+            onClick={() => handleLogin(true)}
+            className="w-full py-3 bg-white text-slate-500 border border-slate-200 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
+          >
+             Não abriu? Use o Modo Alternativo
           </button>
           <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
              <div className="text-left">
