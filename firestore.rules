@@ -1,12 +1,19 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Pilar 0: Rede de Segurança Global - Negar tudo por padrão
     match /{document=**} {
       allow read, write: if false;
     }
 
+    // --- Auxiliares Globais ---
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    // Mandato de Segurança: Usuários devem ter e-mail verificado para escrever
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
     }
 
     function isOwner(userId) {
@@ -17,21 +24,49 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Entidades ---
+
     match /users/{userId} {
+      function isValidUser(data) {
+        return data.keys().hasAll(['email', 'groupLink']) &&
+               data.email is string && data.email.size() <= 200 &&
+               data.groupLink is string && data.groupLink.size() <= 500;
+      }
+
       allow get: if isOwner(userId);
-      allow create: if isOwner(userId) && 
-        request.resource.data.keys().hasAll(['email', 'groupLink']) &&
-        request.resource.data.email == request.auth.token.email;
-      allow update: if isOwner(userId) && 
-        request.resource.data.email == existing().email;
+      allow create: if isOwner(userId) && isVerified() && isValidUser(incoming()) &&
+                    incoming().email == request.auth.token.email;
+      
+      // Pilar 4: Identidade imutável na atualização
+      allow update: if isOwner(userId) && isVerified() && 
+                    incoming().email == existing().email;
 
       match /products/{productId} {
-        allow list, get: if isOwner(userId);
-        allow create: if isOwner(userId) && isValidId(productId) &&
-          request.resource.data.userId == request.auth.uid;
-        allow update: if isOwner(userId) && 
-          request.resource.data.userId == existing().userId;
-        allow delete: if isOwner(userId);
+        function isValidProduct(data) {
+          return data.userId == request.auth.uid &&
+                 data.title is string && data.title.size() <= 500 &&
+                 data.link is string && data.link.size() <= 2000;
+        }
+
+        // Pilar 8: Consulta de Lista Segura
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        
+        allow create: if isOwner(userId) && isVerified() && isValidProduct(incoming()) &&
+                      isValidId(productId);
+        
+        allow update: if isOwner(userId) && isVerified() && isValidProduct(incoming()) &&
+                      incoming().userId == existing().userId;
+        
+        allow delete: if isOwner(userId) && isVerified();
       }
     }
   }

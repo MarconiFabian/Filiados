@@ -25,7 +25,9 @@ import {
   MousePointerClick,
   X,
   LogOut,
-  LogIn
+  LogIn,
+  Search,
+  Tag
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -69,10 +71,62 @@ interface Product {
   coupon: string;
   link: string;
   groupLink: string;
+  category: string;
   addedAt: number;
+  labelOriginalPrice?: string;
+  labelPrice?: string;
+  labelCoupon?: string;
+  labelGroupLink?: string;
 }
 
 const STORAGE_KEY = 'ml_afiliados_v1';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -86,11 +140,21 @@ export default function App() {
   const [isSharing, setIsSharing] = useState(false);
   const [shareStep, setShareStep] = useState(1);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
   const [globalSettings, setGlobalSettings] = useState({
     groupLink: 'https://divulgador.app/sua-bio',
     defaultCoupon: '',
     affiliateId: '',
+    labelOriginalPrice: 'Preço Original (De)',
+    labelPrice: 'Preço Com Desconto (Por)',
+    labelCoupon: 'Cupom Ativo',
+    labelGroupLink: 'Link do seu Grupo',
   });
+
+  // Local state for smooth editing
+  const [localProduct, setLocalProduct] = useState<Product | null>(null);
 
   // Auth State
   useEffect(() => {
@@ -119,7 +183,8 @@ export default function App() {
     }
 
     // Sync settings
-    const userDocRef = doc(db, 'users', user.uid);
+    const userDocPath = `users/${user.uid}`;
+    const userDocRef = doc(db, userDocPath);
     const unsubSettings = onSnapshot(userDocRef, (snap) => {
       if (snap.exists()) {
         const data = snap.data();
@@ -127,6 +192,10 @@ export default function App() {
           groupLink: data.groupLink || 'https://divulgador.app/sua-bio',
           defaultCoupon: data.defaultCoupon || '',
           affiliateId: data.affiliateId || '',
+          labelOriginalPrice: data.labelOriginalPrice || 'Preço Original (De)',
+          labelPrice: data.labelPrice || 'Preço Com Desconto (Por)',
+          labelCoupon: data.labelCoupon || 'Cupom Ativo',
+          labelGroupLink: data.labelGroupLink || 'Link do seu Grupo',
         });
       } else {
         // Init user settings if new
@@ -135,13 +204,18 @@ export default function App() {
           groupLink: 'https://divulgador.app/sua-bio',
           defaultCoupon: '',
           affiliateId: '',
+          labelOriginalPrice: 'Preço Original (De)',
+          labelPrice: 'Preço Com Desconto (Por)',
+          labelCoupon: 'Cupom Ativo',
+          labelGroupLink: 'Link do seu Grupo',
           createdAt: serverTimestamp()
-        });
+        }).catch(err => handleFirestoreError(err, OperationType.WRITE, userDocPath));
       }
-    });
+    }, (err) => handleFirestoreError(err, OperationType.GET, userDocPath));
 
     // Sync products
-    const productsRef = collection(db, 'users', user.uid, 'products');
+    const productsPath = `users/${user.uid}/products`;
+    const productsRef = collection(db, productsPath);
     const q = query(productsRef, orderBy('addedAt', 'desc'));
     const unsubProducts = onSnapshot(q, (snap) => {
       const prods: Product[] = [];
@@ -149,7 +223,7 @@ export default function App() {
         prods.push({ id: doc.id, ...doc.data() } as Product);
       });
       setProducts(prods);
-    });
+    }, (err) => handleFirestoreError(err, OperationType.LIST, productsPath));
 
     return () => {
       unsubSettings();
@@ -203,15 +277,70 @@ export default function App() {
 
   const saveSettings = async (updates: any) => {
     if (!user) return;
+    const path = `users/${user.uid}`;
     try {
-      await setDoc(doc(db, 'users', user.uid), updates, { merge: true });
+      await setDoc(doc(db, path), updates, { merge: true });
       toast.success("Configurações salvas!");
+      setIsSettingsOpen(false);
     } catch (err) {
-      toast.error("Erro ao salvar configurações.");
+      handleFirestoreError(err, OperationType.WRITE, path);
     }
   };
 
+  const filteredProducts = products.filter(p => {
+    const matchesSearch = (p.title || "").toLowerCase().includes(searchQuery.toLowerCase());
+    const effectiveCategory = p.category || 'Geral';
+    const matchesCategory = selectedCategory === 'all' || effectiveCategory === selectedCategory;
+    return matchesSearch && matchesCategory;
+  });
+
+  const categories = Array.from(new Set(['all', ...products.map(p => p.category || 'Geral')]));
+
   const selectedProduct = products.find(p => p.id === selectedProductId);
+
+  // Sync local state when selection changes
+  useEffect(() => {
+    if (!selectedProductId) {
+      setLocalProduct(null);
+      return;
+    }
+    
+    // Reset localProduct only if a DIFFERENT product is selected
+    if (!localProduct || localProduct.id !== selectedProductId) {
+      if (selectedProduct) {
+        setLocalProduct({ ...selectedProduct });
+      }
+    }
+  }, [selectedProductId, selectedProduct]);
+
+  const autoCategorize = (title: string): string => {
+    const categories: Record<string, string[]> = {
+      'Veículos': ['carro', 'moto', 'motocicleta', 'caminhão', 'ônibus', 'náutica', 'barco', 'avião'],
+      'Tecnologia': ['celular', 'smartphone', 'iphone', 'galaxy', 'xiaomi', 'motorola', 'redmi', 'tv', 'televisão', 'notebook', 'laptop', 'macbook', 'tablet', 'ipad', 'kindle', 'monitor', 'caixa de som', 'alexa', 'echo', 'bluetooth', 'fone', 'headphone', 'carregador', 'power bank', 'bateria', 'smartwatch', 'relógio inteligente', 'projetor', 'câmera', 'fotográfica', 'lente', 'impressora', 'teclado', 'mouse', 'console', 'playstation', 'ps5', 'ps4', 'xbox', 'nintendo', 'switch', 'placa de vídeo', 'rtx', 'gtx', 'amd', 'intel', 'processador', 'memória ram', 'ssd', 'gamer', 'headset', 'gabinete', 'controle', 'joystick'],
+      'Casa e Móveis': ['sofá', 'cama', 'armário', 'mesa', 'cadeira', 'iluminação', 'lâmpada', 'lustre', 'cortina', 'climatizador', 'ventilador', 'ar condicionado', 'umidificador', 'almofada', 'tapete', 'espelho', 'quadro', 'lençol', 'travesseiro', 'toalha', 'móvel', 'decoração', 'guarda-roupa', 'estante', 'poltrona', 'colchão'],
+      'Eletrodomésticos': ['geladeira', 'fogão', 'cooktop', 'máquina de lavar', 'lavadora', 'secadora', 'micro-ondas', 'microondas', 'aspirador', 'robô aspirador', 'ferro de passar', 'lavadora de alta pressão', 'aquecedor', 'freezer', 'adega', 'frigobar'],
+      'Cozinha': ['airfryer', 'panela', 'liquidificador', 'batedeira', 'cafeteira', 'fritadeira', 'mixer', 'talher', 'copo', 'prato', 'pote', 'tapper', 'garrafa', 'churrasqueira', 'sanduicheira', 'grill', 'louça', 'escorredor', 'afiador', 'balança', 'utensílio'],
+      'Esportes e Fitness': ['bola', 'bicicleta', 'bike', 'pesca', 'camping', 'academia', 'halter', 'suplemento', 'creatina', 'whey', 'garrafa térmica', 'patins', 'skate', 'prancha', 'mergulho', 'chuteira', 'musculação', 'esteira', 'spinning'],
+      'Ferramentas': ['furadeira', 'parafusadeira', 'serra', 'martelo', 'chave', 'multímetro', 'trena', 'esmerilhadeira', 'ferramenta', 'guincho', 'talha', 'elevação', 'solda', 'parafuso', 'alicate', 'nível', 'compressor', 'morsa', 'torquímetro'],
+      'Construção': ['piso', 'revestimento', 'pintura', 'tinta', 'argamassa', 'cimento', 'telha', 'tijolo', 'elétrica', 'hidráulica', 'tubo', 'conexão', 'pia', 'torneira', 'chuveiro'],
+      'Indústria e Comércio': ['máquina industrial', 'gerador', 'empilhadeira', 'uniforme', 'segurança', 'epis', 'epi', 'balança comercial', 'embalagem', 'automação'],
+      'Pet Shop': ['ração', 'coleira', 'aquário', 'gato', 'cachorro', 'pet', 'caminha pet', 'areia gato'],
+      'Saúde': ['medidor', 'termômetro', 'ortopedia', 'máscara', 'massagem', 'nebulizador', 'oxímetro', 'estetoscópio', 'cadeira de rodas'],
+      'Beleza e Cuidado Pessoal': ['perfume', 'secador', 'chapinha', 'barbeador', 'depilador', 'maquiagem', 'batom', 'shampoo', 'condicionador', 'creme', 'protetor solar', 'skincare', 'hidratante', 'esmalt', 'unha', 'escova', 'pente'],
+      'Moda': ['tênis', 'sapato', 'sandália', 'bota', 'chinelo', 'relógio', 'óculos', 'bolsa', 'mochila', 'carteira', 'camiseta', 'calça', 'bermuda', 'vestido', 'casaco', 'jaqueta', 'joia', 'colar', 'brinco', 'cinta', 'modeladora', 'cueca', 'meia', 'roupa', 'fitness', 'esportivo'],
+      'Bebês': ['fralda', 'carrinho de bebê', 'berço', 'mamadeira', 'chupeta', 'roupa bebê', 'mordedor', 'banheira'],
+      'Brinquedos': ['boneca', 'barbie', 'carrinho de controle', 'lego', 'quebra-cabeça', 'tabuleiro', 'brinquedo', 'pelúcia', 'nerf', 'hot wheels'],
+      'Supermercado': ['alimento', 'bebida', 'arroz', 'feijão', 'café', 'óleo', 'vinho', 'cerveja', 'refrigerante', 'limpeza', 'higiene', 'biscoito', 'bolacha', 'chocolate', 'leite'],
+    };
+
+    const lowerTitle = (title || "").toLowerCase();
+    for (const [cat, keywords] of Object.entries(categories)) {
+      if (keywords.some(k => lowerTitle.includes(k.toLowerCase()))) {
+        return cat;
+      }
+    }
+    return 'Geral';
+  };
 
   const fetchProduct = async (url: string) => {
     setIsLoading(true);
@@ -239,14 +368,21 @@ export default function App() {
         coupon: data.coupon || globalSettings.defaultCoupon,
         link: data.originalLink,
         groupLink: globalSettings.groupLink,
+        category: autoCategorize(data.title),
+        labelOriginalPrice: globalSettings.labelOriginalPrice,
+        labelPrice: globalSettings.labelPrice,
+        labelCoupon: globalSettings.labelCoupon,
+        labelGroupLink: globalSettings.labelGroupLink,
         addedAt: Date.now(),
       };
 
-      await addDoc(collection(db, 'users', user!.uid, 'products'), newProductData);
+      const productsPath = `users/${user.uid}/products`;
+      await addDoc(collection(db, productsPath), newProductData);
       setInputUrl('');
     } catch (err: any) {
+      if (err instanceof Error && err.message.startsWith('{')) throw err; // Already handled
       console.error("Erro completo:", err);
-      alert('Erro ao buscar produto: ' + (err.message || 'Tente novamente. Verifique se o link é válido.'));
+      handleFirestoreError(err, OperationType.CREATE, `users/${user?.uid}/products`);
     } finally {
       setIsLoading(false);
     }
@@ -254,20 +390,33 @@ export default function App() {
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
     if (!user) return;
+    const path = `users/${user.uid}/products/${id}`;
     try {
-      await updateDoc(doc(db, 'users', user.uid, 'products', id), updates);
+      await updateDoc(doc(db, path), updates);
     } catch (err) {
-      console.error(err);
+      handleFirestoreError(err, OperationType.UPDATE, path);
     }
+  };
+
+  const handleLocalUpdate = (updates: Partial<Product>) => {
+    if (!localProduct) return;
+    const updated = { ...localProduct, ...updates };
+    setLocalProduct(updated);
+    
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      updateProduct(localProduct.id, updates);
+    }, 1000);
   };
 
   const deleteProduct = async (id: string) => {
     if (!user) return;
+    const path = `users/${user.uid}/products/${id}`;
     try {
-      await deleteDoc(doc(db, 'users', user.uid, 'products', id));
+      await deleteDoc(doc(db, path));
       if (selectedProductId === id) setSelectedProductId(null);
     } catch (err) {
-      console.error(err);
+      handleFirestoreError(err, OperationType.DELETE, path);
     }
   };
 
@@ -282,13 +431,13 @@ export default function App() {
       `➡️ *${p.title}*`,
       `_Site Oficial Mercado Livre_`,
       ``,
-      p.originalPrice ? `De: ~~R$ ${p.originalPrice}~~` : null,
-      `🔥 por *R$ ${p.price}*`,
-      p.coupon ? `🏷️ Cupom: *${p.coupon}*` : null,
+      p.originalPrice ? `${p.labelOriginalPrice || "De"}: ~~R$ ${p.originalPrice}~~` : null,
+      `${p.labelPrice || "🔥 por"} *R$ ${p.price}*`,
+      p.coupon ? `🏷️ ${p.labelCoupon?.replace(':', '') || "Cupom"}: *${p.coupon}*` : null,
       ``,
       `🛒 ${p.link}`,
       ``,
-      `Link do grupo:`,
+      `${p.labelGroupLink || "Link do grupo"}:`,
       `${p.groupLink}`
     ].filter(v => v !== null);
 
@@ -376,7 +525,8 @@ export default function App() {
   const handleDownloadImage = async () => {
     if (!selectedProduct?.image) return;
     try {
-      const response = await fetch(selectedProduct.image);
+      const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(selectedProduct.image)}`;
+      const response = await fetch(proxiedUrl);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -386,8 +536,58 @@ export default function App() {
       a.click();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      // If direct fetch fails due to CORS, suggest right click
       window.open(selectedProduct.image, '_blank');
+    }
+  };
+
+  const copyImageToClipboard = async () => {
+    if (!selectedProduct?.image) return;
+    
+    try {
+      toast.loading("Copiando imagem...", { id: 'copy-img-toast' });
+      const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(selectedProduct.image)}`;
+      const response = await fetch(proxiedUrl);
+      if (!response.ok) throw new Error("Erro na imagem");
+      const blob = await response.blob();
+
+      const img = new Image();
+      const imageUrl = URL.createObjectURL(blob);
+      
+      await new Promise((resolve, reject) => {
+        img.onload = async () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error("Falha no Canvas");
+            
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob(async (pngBlob) => {
+              if (pngBlob) {
+                try {
+                  await navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': pngBlob })
+                  ]);
+                  toast.success("Imagem copiada com sucesso!", { id: 'copy-img-toast' });
+                  resolve(true);
+                } catch (clipErr) {
+                  reject(clipErr);
+                }
+              } else {
+                reject(new Error("Falha ao gerar blob"));
+              }
+            }, 'image/png');
+          } catch (e) { reject(e); }
+        };
+        img.onerror = () => reject(new Error("Erro ao carregar imagem"));
+        img.src = imageUrl;
+      });
+      
+      URL.revokeObjectURL(imageUrl);
+    } catch (err) {
+      console.error(err);
+      toast.error("Erro ao copiar imagem.", { id: 'copy-img-toast' });
     }
   };
 
@@ -409,7 +609,7 @@ export default function App() {
 
       const newTitle = response.text?.trim();
       if (newTitle) {
-        updateProduct(selectedProduct.id, { title: newTitle });
+        handleLocalUpdate({ title: newTitle });
       }
     } catch (err) {
       console.error('Erro ao melhorar título com IA:', err);
@@ -443,6 +643,11 @@ export default function App() {
             coupon: item.coupon || globalSettings.defaultCoupon,
             link: item.link || '',
             groupLink: globalSettings.groupLink,
+            category: item.category || autoCategorize(item.title),
+            labelOriginalPrice: globalSettings.labelOriginalPrice,
+            labelPrice: globalSettings.labelPrice,
+            labelCoupon: globalSettings.labelCoupon,
+            labelGroupLink: globalSettings.labelGroupLink,
             addedAt: Date.now(),
           })
         );
@@ -560,41 +765,81 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Link Padrão do Grupo/Bio</label>
                   <input 
                     type="text" 
                     value={globalSettings.groupLink}
                     onChange={(e) => setGlobalSettings(prev => ({ ...prev, groupLink: e.target.value }))}
-                    className="w-full text-sm p-4 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                    className="w-full text-xs p-3 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
                     placeholder="https://chat.whatsapp.com/..."
                   />
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Cupom Padrão (Opcional)</label>
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Cupom Padrão</label>
                   <input 
                     type="text" 
                     value={globalSettings.defaultCoupon}
                     onChange={(e) => setGlobalSettings(prev => ({ ...prev, defaultCoupon: e.target.value }))}
-                    className="w-full text-sm p-4 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                    className="w-full text-xs p-3 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
                     placeholder="Ex: BEMVINDO"
                   />
                 </div>
 
-                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
-                   <p className="text-[10px] font-black text-blue-800 uppercase tracking-widest flex items-center gap-2">
-                     <Info size={12} /> Dica de Afiliado
-                   </p>
-                   <p className="text-[11px] text-blue-700 leading-tight">
-                     O Mercado Livre não permite gerar links de afiliado automaticamente sem API paga. Use o botão <b>"Converter em Afiliado"</b> no editor para abrir o site oficial e gerar seu link.
-                   </p>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Rótulo: Preço Original</label>
+                  <input 
+                    type="text" 
+                    value={globalSettings.labelOriginalPrice}
+                    onChange={(e) => setGlobalSettings(prev => ({ ...prev, labelOriginalPrice: e.target.value }))}
+                    className="w-full text-xs p-3 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Rótulo: Preço Promo</label>
+                  <input 
+                    type="text" 
+                    value={globalSettings.labelPrice}
+                    onChange={(e) => setGlobalSettings(prev => ({ ...prev, labelPrice: e.target.value }))}
+                    className="w-full text-xs p-3 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Rótulo: Cupom</label>
+                  <input 
+                    type="text" 
+                    value={globalSettings.labelCoupon}
+                    onChange={(e) => setGlobalSettings(prev => ({ ...prev, labelCoupon: e.target.value }))}
+                    className="w-full text-xs p-3 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Rótulo: Link Grupo</label>
+                  <input 
+                    type="text" 
+                    value={globalSettings.labelGroupLink}
+                    onChange={(e) => setGlobalSettings(prev => ({ ...prev, labelGroupLink: e.target.value }))}
+                    className="w-full text-xs p-3 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                  />
                 </div>
               </div>
 
+              <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
+                <p className="text-[10px] font-black text-blue-800 uppercase tracking-widest flex items-center gap-2">
+                  <Info size={12} /> Dica de Afiliado
+                </p>
+                <p className="text-[11px] text-blue-700 leading-tight">
+                  O Mercado Livre não permite gerar links de afiliado automaticamente sem API paga. Use o botão <b>"Converter em Afiliado"</b> no editor para abrir o site oficial e gerar seu link.
+                </p>
+              </div>
+
               <button 
-                onClick={() => setIsSettingsOpen(false)}
+                onClick={() => saveSettings(globalSettings)}
                 className="w-full py-4 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
               >
                 Salvar Configurações
@@ -746,20 +991,51 @@ export default function App() {
             </div>
 
             <div className="flex-1 overflow-hidden flex flex-col pt-2">
-              <h3 className="text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Fila de Captura ({products.length})</h3>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Fila de Captura ({filteredProducts.length})</h3>
+                <div className="relative">
+                   <Search size={12} className="absolute left-2 top-2 text-slate-400" />
+                   <input 
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Buscar..."
+                    className="pl-7 pr-2 py-1 text-[10px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-400 w-24"
+                   />
+                </div>
+              </div>
+
+              {/* Categories Filter */}
+              <div className="flex gap-2 mb-3 overflow-x-auto pb-1 no-scrollbar">
+                {categories.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setSelectedCategory(cat)}
+                    className={cn(
+                      "px-3 py-1 rounded-full text-[9px] font-black uppercase whitespace-nowrap transition-all border",
+                      selectedCategory === cat 
+                        ? "bg-blue-600 text-white border-blue-600" 
+                        : "bg-white text-slate-500 border-slate-200 hover:border-slate-300"
+                    )}
+                  >
+                    {cat === 'all' ? 'Tudo' : cat}
+                  </button>
+                ))}
+              </div>
+
               <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                {products.length === 0 ? (
+                {filteredProducts.length === 0 ? (
                   <div className="text-center py-12 opacity-50 space-y-2">
                      <Package size={32} className="mx-auto text-slate-300" />
                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Nenhum produto</p>
                   </div>
                 ) : (
-                  products.map(p => (
+                  filteredProducts.map(p => (
                     <motion.div 
                       key={p.id}
                       onClick={() => setSelectedProductId(p.id)}
                       className={cn(
-                        "group flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer",
+                        "group flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer relative overflow-hidden",
                         selectedProductId === p.id 
                           ? "bg-white border-blue-200 ring-2 ring-blue-50" 
                           : "bg-white border-slate-200 hover:border-slate-300"
@@ -775,12 +1051,17 @@ export default function App() {
                         )}
                       </div>
                       <div className="overflow-hidden flex-1">
-                        <p className={cn("text-[11px] font-bold truncate", selectedProductId === p.id ? "text-blue-600" : "text-slate-800")}>{p.title}</p>
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[8px] font-black uppercase whitespace-nowrap border border-blue-100">
+                            {p.category || 'Geral'}
+                          </span>
+                          <p className={cn("text-[11px] font-bold truncate", selectedProductId === p.id ? "text-blue-600" : "text-slate-800")}>{p.title}</p>
+                        </div>
                         <p className="text-[10px] text-slate-500 font-medium">R$ {p.price}</p>
                       </div>
                       <button 
                         onClick={(e) => { e.stopPropagation(); deleteProduct(p.id); }}
-                        className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-red-500 transition-all"
+                        className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-red-500 transition-all flex-shrink-0"
                       >
                         <Trash2 size={12} />
                       </button>
@@ -796,8 +1077,22 @@ export default function App() {
         <section className="col-span-12 lg:col-span-5 bg-white border-r border-slate-200 p-8 overflow-y-auto custom-scrollbar">
           <h2 className="text-[10px] font-black uppercase text-slate-400 mb-6 tracking-widest">2. Editor de Promoção</h2>
           
-          {selectedProduct ? (
+          {localProduct ? (
             <div className="space-y-6 max-w-xl mx-auto">
+              <div className="space-y-1.5 pt-2">
+                <div className="flex justify-between items-center">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Categoria do Produto</label>
+                  <Tag size={12} className="text-slate-400" />
+                </div>
+                <input 
+                  type="text"
+                  value={localProduct.category || "Geral"}
+                  onChange={(e) => handleLocalUpdate({ category: e.target.value })}
+                  placeholder="Ex: Eletrônicos, Cozinha..."
+                  className="w-full text-xs p-3 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                />
+              </div>
+
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Título do Anúncio</label>
@@ -815,34 +1110,44 @@ export default function App() {
                   </button>
                 </div>
                 <textarea 
-                  value={selectedProduct.title}
-                  onChange={(e) => updateProduct(selectedProduct.id, { title: e.target.value })}
+                  value={localProduct.title}
+                  onChange={(e) => handleLocalUpdate({ title: e.target.value })}
                   className="w-full text-sm p-4 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all min-h-[100px] leading-tight"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-6">
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Preço Original (De)</label>
+                  <input 
+                    type="text"
+                    value={localProduct.labelOriginalPrice || "Preço Original (De)"}
+                    onChange={(e) => handleLocalUpdate({ labelOriginalPrice: e.target.value })}
+                    className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
+                  />
                   <div className="relative">
                     <span className="absolute left-4 top-4 text-slate-400 text-sm font-bold">R$</span>
                     <input 
                       type="text" 
-                      value={selectedProduct.originalPrice}
-                      onChange={(e) => updateProduct(selectedProduct.id, { originalPrice: e.target.value })}
+                      value={localProduct.originalPrice}
+                      onChange={(e) => handleLocalUpdate({ originalPrice: e.target.value })}
                       placeholder="Ex: 59,90"
                       className="w-full text-sm p-4 pl-12 border border-slate-200 rounded-xl font-bold text-slate-400 bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all line-through"
                     />
                   </div>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Preço Com Desconto (Por)</label>
+                  <input 
+                    type="text"
+                    value={localProduct.labelPrice || "Preço Com Desconto (Por)"}
+                    onChange={(e) => handleLocalUpdate({ labelPrice: e.target.value })}
+                    className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
+                  />
                   <div className="relative">
                     <span className="absolute left-4 top-4 text-slate-400 text-sm font-bold">R$</span>
                     <input 
                       type="text" 
-                      value={selectedProduct.price}
-                      onChange={(e) => updateProduct(selectedProduct.id, { price: e.target.value })}
+                      value={localProduct.price}
+                      onChange={(e) => handleLocalUpdate({ price: e.target.value })}
                       className="w-full text-sm p-4 pl-12 border border-slate-200 rounded-xl font-black text-green-600 bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
                     />
                   </div>
@@ -851,28 +1156,38 @@ export default function App() {
 
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Cupom Ativo</label>
-                  {selectedProduct.coupon && (
+                  <input 
+                    type="text"
+                    value={localProduct.labelCoupon || "Cupom Ativo"}
+                    onChange={(e) => handleLocalUpdate({ labelCoupon: e.target.value })}
+                    className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
+                  />
+                  {localProduct.coupon && (
                     <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-bold animate-pulse">Detectado</span>
                   )}
                 </div>
                 <input 
                   type="text" 
-                  value={selectedProduct.coupon}
-                  onChange={(e) => updateProduct(selectedProduct.id, { coupon: e.target.value })}
+                  value={localProduct.coupon}
+                  onChange={(e) => handleLocalUpdate({ coupon: e.target.value })}
                   placeholder="Ex: CUPOM10"
                   className="w-full text-sm p-4 border border-orange-200 rounded-xl font-black text-orange-600 bg-orange-50/30 focus:ring-1 focus:ring-orange-400 outline-none transition-all tracking-wider uppercase"
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Link do seu Grupo</label>
+                <input 
+                  type="text"
+                  value={localProduct.labelGroupLink || "Link do seu Grupo"}
+                  onChange={(e) => handleLocalUpdate({ labelGroupLink: e.target.value })}
+                  className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full mb-1.5"
+                />
                 <div className="relative">
                   <Smartphone className="absolute left-4 top-4 text-slate-400" size={16} />
                   <input 
                     type="text" 
-                    value={selectedProduct.groupLink}
-                    onChange={(e) => updateProduct(selectedProduct.id, { groupLink: e.target.value })}
+                    value={localProduct.groupLink}
+                    onChange={(e) => handleLocalUpdate({ groupLink: e.target.value })}
                     className="w-full text-sm p-4 pl-12 border border-slate-200 rounded-xl text-blue-600 font-medium bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
                   />
                 </div>
@@ -881,7 +1196,7 @@ export default function App() {
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Link de Afiliado</label>
-                  {!selectedProduct.link.includes('/sec/') && !selectedProduct.link.includes('redirect') && !selectedProduct.link.includes('ml-social-selling') && !selectedProduct.link.includes('meli.la') && (
+                  {!localProduct.link.includes('/sec/') && !localProduct.link.includes('redirect') && !localProduct.link.includes('ml-social-selling') && !localProduct.link.includes('meli.la') && (
                     <button 
                       onClick={openAffiliateLinkBuilder}
                       className="text-[9px] font-black uppercase text-blue-600 hover:underline flex items-center gap-1"
@@ -894,16 +1209,16 @@ export default function App() {
                   <ExternalLink className="absolute left-4 top-4 text-slate-400" size={16} />
                   <input 
                     type="text" 
-                    value={selectedProduct.link}
-                    onChange={(e) => updateProduct(selectedProduct.id, { link: e.target.value })}
+                    value={localProduct.link}
+                    onChange={(e) => handleLocalUpdate({ link: e.target.value })}
                     className={cn(
                       "w-full text-sm p-4 pl-12 border rounded-xl font-medium bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all truncate",
-                      !selectedProduct.link.includes('/sec/') && !selectedProduct.link.includes('redirect') && !selectedProduct.link.includes('ml-social-selling') && !selectedProduct.link.includes('meli.la')
+                      !localProduct.link.includes('/sec/') && !localProduct.link.includes('redirect') && !localProduct.link.includes('ml-social-selling') && !localProduct.link.includes('meli.la')
                         ? "border-yellow-200 text-slate-600"
                         : "border-green-200 text-green-700 font-bold"
                     )}
                   />
-                  {(!selectedProduct.link.includes('/sec/') && !selectedProduct.link.includes('redirect') && !selectedProduct.link.includes('ml-social-selling') && !selectedProduct.link.includes('meli.la')) && (
+                  {(!localProduct.link.includes('/sec/') && !localProduct.link.includes('redirect') && !localProduct.link.includes('ml-social-selling') && !localProduct.link.includes('meli.la')) && (
                     <div className="absolute right-3 top-3.5 flex items-center gap-1 text-[9px] font-black bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full uppercase">
                       <Info size={10} /> Link Comum
                     </div>
@@ -917,7 +1232,14 @@ export default function App() {
                   className="flex-1 flex flex-col items-center gap-1.5 p-4 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all group"
                 >
                   <ImageIcon size={20} className="text-slate-400 group-hover:text-blue-500" />
-                  <span className="text-[10px] font-black uppercase text-slate-400 group-hover:text-slate-900">Baixar Imagem</span>
+                  <span className="text-[10px] font-black uppercase text-slate-400 group-hover:text-slate-900 leading-tight text-center">Baixar Imagem</span>
+                </button>
+                <button 
+                  onClick={copyImageToClipboard}
+                  className="flex-1 flex flex-col items-center gap-1.5 p-4 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all group"
+                >
+                  <Copy size={20} className="text-slate-400 group-hover:text-blue-500" />
+                  <span className="text-[10px] font-black uppercase text-slate-400 group-hover:text-slate-900 leading-tight text-center">Copiar Imagem</span>
                 </button>
                 <button 
                   onClick={handleCopy}
@@ -927,7 +1249,7 @@ export default function App() {
                   )}
                 >
                   {isCopied ? <Check size={20} className="text-blue-600" /> : <Copy size={20} className="text-slate-400 group-hover:text-blue-500" />}
-                  <span className={cn("text-[10px] font-black uppercase", isCopied ? "text-blue-600" : "text-slate-400 group-hover:text-slate-900")}>
+                  <span className={cn("text-[10px] font-black uppercase leading-tight text-center", isCopied ? "text-blue-600" : "text-slate-400 group-hover:text-slate-900")}>
                     {isCopied ? "Copiado!" : "Copiar Texto"}
                   </span>
                 </button>
@@ -980,11 +1302,11 @@ export default function App() {
             
             {/* Chat Area */}
             <div className="flex-1 p-4 pb-12 overflow-y-auto space-y-4">
-              {selectedProduct ? (
+              {localProduct ? (
                 <div className="bg-white rounded-2xl rounded-tl-none p-2 shadow-sm border-b border-black/5 animate-in fade-in slide-in-from-bottom-4 duration-300">
-                  {selectedProduct.image ? (
+                  {localProduct.image ? (
                     <div className="w-full aspect-square bg-slate-50 rounded-xl mb-3 overflow-hidden border border-slate-100 flex items-center justify-center p-2">
-                       <img src={selectedProduct.image} className="w-full h-full object-contain" alt={selectedProduct.title} />
+                       <img src={localProduct.image} className="w-full h-full object-contain" alt={localProduct.title} />
                     </div>
                   ) : (
                     <div className="w-full aspect-square bg-slate-50 rounded-xl mb-3 border border-dashed border-slate-200 flex items-center justify-center">
@@ -992,21 +1314,21 @@ export default function App() {
                     </div>
                   )}
                   <div className="p-1 space-y-1 text-slate-800 leading-tight">
-                    <p className="text-[13px] font-bold">➡️ {selectedProduct.title}</p>
+                    <p className="text-[13px] font-bold">➡️ {localProduct.title}</p>
                     <p className="text-[12px] italic text-slate-400 font-serif">Site Oficial Mercado Livre</p>
-                    {selectedProduct.originalPrice && (
-                      <p className="text-[12px] text-slate-400 line-through">De: R$ {selectedProduct.originalPrice}</p>
+                    {localProduct.originalPrice && (
+                      <p className="text-[12px] text-slate-400 line-through">De: R$ {localProduct.originalPrice}</p>
                     )}
                     <div className="h-2" />
-                    <p className="text-[13px]">🔥 por <span className="font-bold">R$ {selectedProduct.price}</span></p>
-                    {selectedProduct.coupon && (
-                      <p className="text-[13px]">🏷️ Cupom: <span className="font-bold underline decoration-yellow-400 decoration-2">{selectedProduct.coupon}</span></p>
+                    <p className="text-[13px]">🔥 por <span className="font-bold">R$ {localProduct.price}</span></p>
+                    {localProduct.coupon && (
+                      <p className="text-[13px]">🏷️ {localProduct.labelCoupon?.replace(':', '') || "Cupom"}: <span className="font-bold underline decoration-yellow-400 decoration-2">{localProduct.coupon}</span></p>
                     )}
                     <div className="h-2" />
-                    <p className="text-[13px] text-blue-600 underline truncate">{selectedProduct.link}</p>
+                    <p className="text-[13px] text-blue-600 underline truncate">{localProduct.link}</p>
                     <div className="h-3" />
-                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-tighter">Link do grupo:</p>
-                    <p className="text-[11px] text-blue-600 underline truncate">{selectedProduct.groupLink}</p>
+                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-tighter">{localProduct.labelGroupLink || "Link do grupo"}:</p>
+                    <p className="text-[11px] text-blue-600 underline truncate">{localProduct.groupLink}</p>
                   </div>
                   <div className="flex justify-end gap-1.5 mt-1 pr-1 items-center">
                     <span className="text-[10px] text-slate-400 font-bold">14:32</span>

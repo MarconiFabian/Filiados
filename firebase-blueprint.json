@@ -25,6 +25,7 @@
         "coupon": { "type": "string" },
         "link": { "type": "string" },
         "groupLink": { "type": "string" },
+        "category": { "type": "string" },
         "addedAt": { "type": "number" }
       },
       "required": ["userId", "title", "link", "addedAt"]
