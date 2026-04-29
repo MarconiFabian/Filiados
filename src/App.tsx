@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Package, 
   Send, 
@@ -27,9 +27,11 @@ import {
   LogOut,
   LogIn,
   Search,
-  Tag
+  Tag,
+  PartyPopper
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import confetti from 'canvas-confetti';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { GoogleGenAI } from "@google/genai";
@@ -77,6 +79,27 @@ interface Product {
   labelPrice?: string;
   labelCoupon?: string;
   labelGroupLink?: string;
+  isHighlight?: boolean;
+}
+
+interface GlobalSettings {
+  groupLink: string;
+  defaultCoupon: string;
+  affiliateId: string;
+  labelOriginalPrice: string;
+  labelPrice: string;
+  labelCoupon: string;
+  labelGroupLink: string;
+  emojiTitle: string;
+  emojiPrice: string;
+  emojiCoupon: string;
+  emojiGroup: string;
+  showEmojiTitle: boolean;
+  showEmojiPrice: boolean;
+  showEmojiCoupon: boolean;
+  showEmojiGroup: boolean;
+  cardStyle: 'classic' | 'modern' | 'soft' | 'glass';
+  themeColor: string;
 }
 
 const STORAGE_KEY = 'ml_afiliados_v1';
@@ -147,10 +170,20 @@ export default function App() {
     groupLink: 'https://divulgador.app/sua-bio',
     defaultCoupon: '',
     affiliateId: '',
-    labelOriginalPrice: 'Preço Original (De)',
-    labelPrice: 'Preço Com Desconto (Por)',
-    labelCoupon: 'Cupom Ativo',
-    labelGroupLink: 'Link do seu Grupo',
+    labelOriginalPrice: 'De:',
+    labelPrice: 'por',
+    labelCoupon: 'Cupom:',
+    labelGroupLink: 'Link do Grupo:',
+    emojiTitle: '➡️',
+    emojiPrice: '🔥',
+    emojiCoupon: '🏷️',
+    emojiGroup: '🛒',
+    showEmojiTitle: true,
+    showEmojiPrice: true,
+    showEmojiCoupon: true,
+    showEmojiGroup: true,
+    cardStyle: 'modern',
+    themeColor: 'blue', // default
   });
 
   // Local state for smooth editing
@@ -192,10 +225,20 @@ export default function App() {
           groupLink: data.groupLink || 'https://divulgador.app/sua-bio',
           defaultCoupon: data.defaultCoupon || '',
           affiliateId: data.affiliateId || '',
-          labelOriginalPrice: data.labelOriginalPrice || 'Preço Original (De)',
-          labelPrice: data.labelPrice || 'Preço Com Desconto (Por)',
-          labelCoupon: data.labelCoupon || 'Cupom Ativo',
-          labelGroupLink: data.labelGroupLink || 'Link do seu Grupo',
+          labelOriginalPrice: data.labelOriginalPrice ?? 'De:',
+          labelPrice: data.labelPrice ?? 'por',
+          labelCoupon: data.labelCoupon ?? 'Cupom:',
+          labelGroupLink: data.labelGroupLink ?? 'Link do Grupo:',
+          emojiTitle: data.emojiTitle || '➡️',
+          emojiPrice: data.emojiPrice || '🔥',
+          emojiCoupon: data.emojiCoupon || '🏷️',
+          emojiGroup: data.emojiGroup || '🛒',
+          showEmojiTitle: data.showEmojiTitle ?? true,
+          showEmojiPrice: data.showEmojiPrice ?? true,
+          showEmojiCoupon: data.showEmojiCoupon ?? true,
+          showEmojiGroup: data.showEmojiGroup ?? true,
+          cardStyle: data.cardStyle || 'modern',
+          themeColor: data.themeColor || 'blue',
         });
       } else {
         // Init user settings if new
@@ -204,10 +247,20 @@ export default function App() {
           groupLink: 'https://divulgador.app/sua-bio',
           defaultCoupon: '',
           affiliateId: '',
-          labelOriginalPrice: 'Preço Original (De)',
-          labelPrice: 'Preço Com Desconto (Por)',
-          labelCoupon: 'Cupom Ativo',
-          labelGroupLink: 'Link do seu Grupo',
+          labelOriginalPrice: 'De:',
+          labelPrice: 'por',
+          labelCoupon: 'Cupom:',
+          labelGroupLink: 'Link do Grupo:',
+          emojiTitle: '➡️',
+          emojiPrice: '🔥',
+          emojiCoupon: '🏷️',
+          emojiGroup: '🛒',
+          showEmojiTitle: true,
+          showEmojiPrice: true,
+          showEmojiCoupon: true,
+          showEmojiGroup: true,
+          cardStyle: 'modern',
+          themeColor: 'blue',
           createdAt: serverTimestamp()
         }).catch(err => handleFirestoreError(err, OperationType.WRITE, userDocPath));
       }
@@ -298,6 +351,30 @@ export default function App() {
 
   const selectedProduct = products.find(p => p.id === selectedProductId);
 
+  const fireCelebration = useCallback(() => {
+    const duration = 3 * 1000;
+    const animationEnd = Date.now() + duration;
+    const defaults = { startVelocity: 45, spread: 360, ticks: 100, zIndex: 10000 };
+
+    const randomInRange = (min: number, max: number) => Math.random() * (max - min) + min;
+
+    const interval: any = setInterval(function() {
+      const timeLeft = animationEnd - Date.now();
+
+      if (timeLeft <= 0) {
+        return clearInterval(interval);
+      }
+
+      const particleCount = 70 * (timeLeft / duration);
+      // side blasts
+      confetti({ ...defaults, particleCount, origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 } });
+      confetti({ ...defaults, particleCount, origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 } });
+    }, 250);
+  }, []);
+
+  const lastCelebratedId = useRef<string | null>(null);
+  const lastCelebrateState = useRef<boolean>(false);
+
   // Sync local state when selection changes
   useEffect(() => {
     if (!selectedProductId) {
@@ -312,6 +389,20 @@ export default function App() {
       }
     }
   }, [selectedProductId, selectedProduct]);
+
+  // Celebration Trigger
+  useEffect(() => {
+    if (localProduct?.isHighlight) {
+      const isNewProduct = localProduct.id !== lastCelebratedId.current;
+      const wasNotHighlight = !lastCelebrateState.current;
+
+      if (isNewProduct || wasNotHighlight) {
+        setTimeout(fireCelebration, 300);
+      }
+    }
+    lastCelebratedId.current = localProduct?.id || null;
+    lastCelebrateState.current = !!localProduct?.isHighlight;
+  }, [localProduct?.id, localProduct?.isHighlight, fireCelebration]);
 
   const autoCategorize = (title: string): string => {
     const categories: Record<string, string[]> = {
@@ -374,6 +465,7 @@ export default function App() {
         labelCoupon: globalSettings.labelCoupon,
         labelGroupLink: globalSettings.labelGroupLink,
         addedAt: Date.now(),
+        isHighlight: false,
       };
 
       const productsPath = `users/${user.uid}/products`;
@@ -428,16 +520,18 @@ export default function App() {
 
   const formatText = (p: Product) => {
     const lines = [
-      `➡️ *${p.title}*`,
+      p.isHighlight ? `🚨 🎉 *SUPER OFERTA* 🎉 🚨` : null,
+      p.isHighlight ? `-------------------------` : null,
+      `${globalSettings.showEmojiTitle ? globalSettings.emojiTitle + ' ' : ''}*${p.title}*`,
       `_Site Oficial Mercado Livre_`,
       ``,
-      p.originalPrice ? `${p.labelOriginalPrice || "De"}: ~~R$ ${p.originalPrice}~~` : null,
-      `${p.labelPrice || "🔥 por"} *R$ ${p.price}*`,
-      p.coupon ? `🏷️ ${p.labelCoupon?.replace(':', '') || "Cupom"}: *${p.coupon}*` : null,
+      p.originalPrice ? `${p.labelOriginalPrice ?? globalSettings.labelOriginalPrice} ~R$ ${p.originalPrice}~` : null,
+      `${globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}${p.labelPrice ?? globalSettings.labelPrice} *R$ ${p.price}*`,
+      p.coupon ? `${globalSettings.showEmojiCoupon ? globalSettings.emojiCoupon + ' ' : ''}${p.labelCoupon ?? globalSettings.labelCoupon} *${p.coupon}*` : null,
       ``,
-      `🛒 ${p.link}`,
+      `${globalSettings.showEmojiGroup ? globalSettings.emojiGroup + ' ' : ''}${p.link}`,
       ``,
-      `${p.labelGroupLink || "Link do grupo"}:`,
+      `${p.labelGroupLink ?? globalSettings.labelGroupLink}`,
       `${p.groupLink}`
     ].filter(v => v !== null);
 
@@ -459,6 +553,12 @@ export default function App() {
 
   const shareToWhatsApp = async () => {
     if (!selectedProduct) return;
+
+    // Celebration for super offers
+    if (selectedProduct.isHighlight) {
+      fireCelebration();
+    }
+
     setIsSharing(true);
     
     try {
@@ -649,6 +749,7 @@ export default function App() {
             labelCoupon: globalSettings.labelCoupon,
             labelGroupLink: globalSettings.labelGroupLink,
             addedAt: Date.now(),
+            isHighlight: false,
           })
         );
         await Promise.all(batchPromises);
@@ -827,6 +928,117 @@ export default function App() {
                     className="w-full text-xs p-3 border border-slate-200 rounded-xl font-bold bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all"
                   />
                 </div>
+
+                <div className="pt-6 border-t border-slate-100 col-span-full">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Cor do Tema</p>
+                  <div className="flex flex-wrap gap-3">
+                    {[
+                      { id: 'blue', color: 'bg-blue-500', name: 'Azul' },
+                      { id: 'emerald', color: 'bg-emerald-500', name: 'Verde' },
+                      { id: 'pink', color: 'bg-pink-500', name: 'Rosa' },
+                      { id: 'orange', color: 'bg-orange-500', name: 'Laranja' },
+                      { id: 'indigo', color: 'bg-indigo-500', name: 'Índigo' },
+                      { id: 'slate', color: 'bg-slate-800', name: 'Escuro' },
+                    ].map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => setGlobalSettings(prev => ({ ...prev, themeColor: c.id }))}
+                        className={cn(
+                          "w-10 h-10 rounded-full border-2 transition-all flex items-center justify-center",
+                          globalSettings.themeColor === c.id 
+                            ? "border-slate-400 ring-2 ring-slate-100 scale-110" 
+                            : "border-transparent hover:scale-105"
+                        )}
+                      >
+                        <div className={cn("w-7 h-7 rounded-full shadow-sm", c.color)}></div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-6 border-t border-slate-100 col-span-full">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Estilo Visual do Card</p>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    {[
+                      { id: 'classic', label: 'Clássico', class: 'rounded-lg border-slate-200' },
+                      { id: 'modern', label: 'Moderno', class: 'rounded-2xl border-slate-200 shadow-sm' },
+                      { id: 'soft', label: 'Suave', class: 'rounded-[32px] border-slate-100 shadow-md' },
+                      { id: 'glass', label: 'Glass', class: 'rounded-2xl border-white/40 bg-white/80 backdrop-blur-sm' },
+                    ].map((style) => (
+                      <button
+                        key={style.id}
+                        onClick={() => setGlobalSettings(prev => ({ ...prev, cardStyle: style.id as any }))}
+                        className={cn(
+                          "p-3 border-2 flex flex-col items-center gap-2 transition-all group",
+                          globalSettings.cardStyle === style.id 
+                            ? "border-blue-500 bg-blue-50" 
+                            : "border-slate-100 hover:border-slate-200"
+                        )}
+                        style={{ borderRadius: style.id === 'soft' ? '20px' : style.id === 'classic' ? '8px' : '12px' }}
+                      >
+                        <div className={cn("w-10 h-6 bg-white border shadow-sm", style.class)}></div>
+                        <span className="text-[10px] font-bold text-slate-600 uppercase">{style.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="pt-6 border-t border-slate-100 col-span-full">
+                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4">Personalização de Mensagem (Emojis)</p>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {[
+                      { key: 'emojiTitle', showKey: 'showEmojiTitle', label: 'Emoji do Título', current: globalSettings.emojiTitle, active: globalSettings.showEmojiTitle },
+                      { key: 'emojiPrice', showKey: 'showEmojiPrice', label: 'Emoji do Preço', current: globalSettings.emojiPrice, active: globalSettings.showEmojiPrice },
+                      { key: 'emojiCoupon', showKey: 'showEmojiCoupon', label: 'Emoji do Cupom', current: globalSettings.emojiCoupon, active: globalSettings.showEmojiCoupon },
+                      { key: 'emojiGroup', showKey: 'showEmojiGroup', label: 'Emoji de Link/Grupo', current: globalSettings.emojiGroup, active: globalSettings.showEmojiGroup },
+                    ].map((item) => (
+                      <div key={item.key} className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                        <div className="flex items-center justify-between mb-3">
+                          <label className="text-[10px] font-black text-slate-500 uppercase">{item.label}</label>
+                          <button
+                            onClick={() => setGlobalSettings(prev => ({ ...prev, [item.showKey]: !prev[item.showKey as keyof GlobalSettings] }))}
+                            className={cn(
+                              "relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none",
+                              item.active ? "bg-blue-600" : "bg-slate-300"
+                            )}
+                          >
+                            <span className={cn("inline-block h-3 w-3 transform rounded-full bg-white transition-transform", item.active ? "translate-x-5" : "translate-x-1")} />
+                          </button>
+                        </div>
+                        
+                        {item.active && (
+                          <div className="space-y-3">
+                            <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto p-1 custom-scrollbar bg-white rounded-lg border border-slate-100 mb-2">
+                              {['➡️', '🔥', '🏷️', '🛒', '⚡', '💎', '🚀', '🎁', '📢', '✅', '✨', '⭐', '📍', '💥', '💰', '📉', '👀', '🎯', '🚩', '📣', '🎈', '🎉', '🎊', '🤑', '🏆', '🔥'].map((emoji, idx) => (
+                                <button
+                                  key={`${emoji}-${idx}`}
+                                  onClick={() => setGlobalSettings(prev => ({ ...prev, [item.key]: emoji }))}
+                                  className={cn(
+                                    "w-8 h-8 flex items-center justify-center rounded-lg bg-white border transition-all text-sm hover:scale-110",
+                                    item.current === emoji ? "border-blue-500 bg-blue-50 z-10 shadow-sm" : "border-slate-100 hover:border-slate-200"
+                                  )}
+                                >
+                                  {emoji}
+                                </button>
+                              ))}
+                            </div>
+                            <input 
+                              type="text" 
+                              value={item.current}
+                              onChange={(e) => setGlobalSettings(prev => ({ ...prev, [item.key]: e.target.value }))}
+                              placeholder="Ou digite o emoji..."
+                              className="w-full text-xs p-2 border border-slate-200 rounded-lg bg-white focus:ring-1 focus:ring-blue-400 outline-none"
+                            />
+                          </div>
+                        )}
+                        {!item.active && (
+                          <p className="text-[10px] text-slate-400 italic">Desativado - nenhum emoji será mostrado neste campo.</p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="bg-blue-50 p-4 rounded-xl border border-blue-100 space-y-2">
@@ -915,6 +1127,12 @@ export default function App() {
           </div>
         </div>
         <div className="flex gap-3">
+          <button 
+            onClick={() => setIsSettingsOpen(true)}
+            className="hidden md:flex items-center gap-2 bg-white px-4 py-2 rounded-lg text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50 border border-slate-200 transition-all"
+          >
+            <Settings size={14} /> Configurações
+          </button>
           <button 
             onClick={() => setIsBulkModalOpen(true)}
             className="hidden md:flex items-center gap-2 bg-white px-4 py-2 rounded-lg text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50 border border-slate-200 transition-all"
@@ -1055,6 +1273,11 @@ export default function App() {
                           <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[8px] font-black uppercase whitespace-nowrap border border-blue-100">
                             {p.category || 'Geral'}
                           </span>
+                          {p.isHighlight && (
+                            <span className="px-1.5 py-0.5 bg-yellow-400 text-slate-900 rounded text-[8px] font-black uppercase whitespace-nowrap shadow-sm">
+                              Super
+                            </span>
+                          )}
                           <p className={cn("text-[11px] font-bold truncate", selectedProductId === p.id ? "text-blue-600" : "text-slate-800")}>{p.title}</p>
                         </div>
                         <p className="text-[10px] text-slate-500 font-medium">R$ {p.price}</p>
@@ -1079,7 +1302,48 @@ export default function App() {
           
           {localProduct ? (
             <div className="space-y-6 max-w-xl mx-auto">
-              <div className="space-y-1.5 pt-2">
+                {/* Super Oferta Toggle */}
+                <div className="pt-2">
+                  <button
+                    onClick={() => {
+                       const newState = !localProduct.isHighlight;
+                       handleLocalUpdate({ isHighlight: newState });
+                       if (newState) {
+                         fireCelebration();
+                       }
+                    }}
+                    className={cn(
+                      "w-full p-4 rounded-xl border-2 flex items-center justify-between transition-all group",
+                      localProduct.isHighlight 
+                        ? "bg-yellow-400 border-yellow-500 shadow-lg shadow-yellow-100" 
+                        : "bg-slate-50 border-slate-200 hover:border-slate-300"
+                    )}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={cn(
+                        "w-10 h-10 rounded-full flex items-center justify-center transition-all",
+                        localProduct.isHighlight ? "bg-white text-yellow-600 scale-110" : "bg-slate-200 text-slate-400"
+                      )}>
+                        <PartyPopper size={20} />
+                      </div>
+                      <div className="text-left">
+                        <p className={cn("text-[10px] font-black uppercase tracking-widest leading-none mb-1", localProduct.isHighlight ? "text-slate-900" : "text-slate-400")}>Highlight VIP</p>
+                        <p className={cn("text-xs font-bold", localProduct.isHighlight ? "text-slate-900" : "text-slate-500")}>Transformar em Super Oferta</p>
+                      </div>
+                    </div>
+                    <div className={cn(
+                      "w-12 h-6 rounded-full relative transition-all border",
+                      localProduct.isHighlight ? "bg-slate-900 border-slate-900" : "bg-slate-200 border-slate-300"
+                    )}>
+                      <div className={cn(
+                        "w-4 h-4 rounded-full bg-white absolute top-1 transition-all shadow-sm",
+                        localProduct.isHighlight ? "right-1" : "left-1"
+                      )} />
+                    </div>
+                  </button>
+                </div>
+
+                <div className="space-y-1.5 pt-2">
                 <div className="flex justify-between items-center">
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Categoria do Produto</label>
                   <Tag size={12} className="text-slate-400" />
@@ -1120,8 +1384,9 @@ export default function App() {
                 <div className="space-y-1.5">
                   <input 
                     type="text"
-                    value={localProduct.labelOriginalPrice || "Preço Original (De)"}
+                    value={localProduct.labelOriginalPrice}
                     onChange={(e) => handleLocalUpdate({ labelOriginalPrice: e.target.value })}
+                    placeholder="De:"
                     className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
                   />
                   <div className="relative">
@@ -1138,8 +1403,9 @@ export default function App() {
                 <div className="space-y-1.5">
                   <input 
                     type="text"
-                    value={localProduct.labelPrice || "Preço Com Desconto (Por)"}
+                    value={localProduct.labelPrice}
                     onChange={(e) => handleLocalUpdate({ labelPrice: e.target.value })}
+                    placeholder="Por:"
                     className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
                   />
                   <div className="relative">
@@ -1158,8 +1424,9 @@ export default function App() {
                 <div className="flex justify-between items-center">
                   <input 
                     type="text"
-                    value={localProduct.labelCoupon || "Cupom Ativo"}
+                    value={localProduct.labelCoupon}
                     onChange={(e) => handleLocalUpdate({ labelCoupon: e.target.value })}
+                    placeholder="Cupom Ativo:"
                     className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
                   />
                   {localProduct.coupon && (
@@ -1178,8 +1445,9 @@ export default function App() {
               <div className="space-y-1.5">
                 <input 
                   type="text"
-                  value={localProduct.labelGroupLink || "Link do seu Grupo"}
+                  value={localProduct.labelGroupLink}
                   onChange={(e) => handleLocalUpdate({ labelGroupLink: e.target.value })}
+                  placeholder="Link do Grupo:"
                   className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full mb-1.5"
                 />
                 <div className="relative">
@@ -1303,9 +1571,41 @@ export default function App() {
             {/* Chat Area */}
             <div className="flex-1 p-4 pb-12 overflow-y-auto space-y-4">
               {localProduct ? (
-                <div className="bg-white rounded-2xl rounded-tl-none p-2 shadow-sm border-b border-black/5 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                <div className={cn(
+                  "p-2 animate-in fade-in slide-in-from-bottom-4 duration-300 transition-all relative overflow-hidden",
+                  globalSettings.cardStyle === 'classic' && "rounded-lg shadow-sm border border-slate-200",
+                  globalSettings.cardStyle === 'modern' && "rounded-2xl rounded-tl-none shadow-md border-b-2",
+                  globalSettings.cardStyle === 'soft' && "rounded-[32px] shadow-xl border border-slate-100",
+                  globalSettings.cardStyle === 'glass' && "rounded-2xl border border-white/60 bg-white/90 backdrop-blur-md shadow-lg",
+                  
+                  // Color accents
+                  globalSettings.themeColor === 'blue' && (globalSettings.cardStyle === 'modern' ? "border-blue-500" : ""),
+                  globalSettings.themeColor === 'emerald' && (globalSettings.cardStyle === 'modern' ? "border-emerald-500" : ""),
+                  globalSettings.themeColor === 'pink' && (globalSettings.cardStyle === 'modern' ? "border-pink-500" : ""),
+                  globalSettings.themeColor === 'orange' && (globalSettings.cardStyle === 'modern' ? "border-orange-500" : ""),
+                  globalSettings.themeColor === 'indigo' && (globalSettings.cardStyle === 'modern' ? "border-indigo-500" : ""),
+                  globalSettings.themeColor === 'slate' && (globalSettings.cardStyle === 'modern' ? "border-slate-800" : ""),
+
+                  // Highlight styling
+                  localProduct.isHighlight ? "bg-yellow-50 ring-2 ring-yellow-400 ring-offset-0 scale-[1.02] shadow-yellow-200" : "bg-white"
+                )}>
+                  {localProduct.isHighlight && (
+                    <div className="absolute top-0 right-0 bg-yellow-400 px-3 py-1 rounded-bl-xl z-20 shadow-md flex items-center gap-1.5 animate-bounce">
+                      <PartyPopper size={12} className="text-slate-900" />
+                      <p className="text-[9px] font-black text-slate-900 uppercase tracking-widest italic flex items-center gap-1">
+                        Super Oferta
+                      </p>
+                      <PartyPopper size={12} className="text-slate-900 -scale-x-100" />
+                    </div>
+                  )}
                   {localProduct.image ? (
-                    <div className="w-full aspect-square bg-slate-50 rounded-xl mb-3 overflow-hidden border border-slate-100 flex items-center justify-center p-2">
+                    <div className={cn(
+                      "w-full aspect-square bg-slate-50 mb-3 overflow-hidden border border-slate-100 flex items-center justify-center p-2 transition-all",
+                      globalSettings.cardStyle === 'classic' && "rounded-md",
+                      globalSettings.cardStyle === 'modern' && "rounded-xl",
+                      globalSettings.cardStyle === 'soft' && "rounded-[24px]",
+                      globalSettings.cardStyle === 'glass' && "rounded-xl"
+                    )}>
                        <img src={localProduct.image} className="w-full h-full object-contain" alt={localProduct.title} />
                     </div>
                   ) : (
@@ -1314,25 +1614,69 @@ export default function App() {
                     </div>
                   )}
                   <div className="p-1 space-y-1 text-slate-800 leading-tight">
-                    <p className="text-[13px] font-bold">➡️ {localProduct.title}</p>
+                    <p className="text-[13px] font-bold">
+                      {globalSettings.showEmojiTitle ? globalSettings.emojiTitle + ' ' : ''}
+                      {localProduct.title}
+                    </p>
                     <p className="text-[12px] italic text-slate-400 font-serif">Site Oficial Mercado Livre</p>
                     {localProduct.originalPrice && (
-                      <p className="text-[12px] text-slate-400 line-through">De: R$ {localProduct.originalPrice}</p>
+                      <p className="text-[12px] text-slate-400">{localProduct.labelOriginalPrice ?? globalSettings.labelOriginalPrice} <span className="line-through">R$ {localProduct.originalPrice}</span></p>
                     )}
                     <div className="h-2" />
-                    <p className="text-[13px]">🔥 por <span className="font-bold">R$ {localProduct.price}</span></p>
+                    <p className="text-[13px]">
+                      {globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}
+                      {localProduct.labelPrice ?? globalSettings.labelPrice} <span className="font-bold">R$ {localProduct.price}</span>
+                    </p>
                     {localProduct.coupon && (
-                      <p className="text-[13px]">🏷️ {localProduct.labelCoupon?.replace(':', '') || "Cupom"}: <span className="font-bold underline decoration-yellow-400 decoration-2">{localProduct.coupon}</span></p>
+                      <p className="text-[13px]">
+                        {globalSettings.showEmojiCoupon ? globalSettings.emojiCoupon + ' ' : ''}
+                        {localProduct.labelCoupon ?? globalSettings.labelCoupon} <span className={cn(
+                          "font-bold underline decoration-2",
+                          globalSettings.themeColor === 'blue' && "decoration-blue-400",
+                          globalSettings.themeColor === 'emerald' && "decoration-emerald-400",
+                          globalSettings.themeColor === 'pink' && "decoration-pink-400",
+                          globalSettings.themeColor === 'orange' && "decoration-orange-400",
+                          globalSettings.themeColor === 'indigo' && "decoration-indigo-400",
+                          globalSettings.themeColor === 'slate' && "decoration-slate-400"
+                        )}>{localProduct.coupon}</span>
+                      </p>
                     )}
                     <div className="h-2" />
-                    <p className="text-[13px] text-blue-600 underline truncate">{localProduct.link}</p>
+                    <p className={cn(
+                      "text-[13px] underline truncate",
+                      globalSettings.themeColor === 'blue' && "text-blue-600",
+                      globalSettings.themeColor === 'emerald' && "text-emerald-600",
+                      globalSettings.themeColor === 'pink' && "text-pink-600",
+                      globalSettings.themeColor === 'orange' && "text-orange-600",
+                      globalSettings.themeColor === 'indigo' && "text-indigo-600",
+                      globalSettings.themeColor === 'slate' && "text-slate-800"
+                    )}>
+                      {globalSettings.showEmojiGroup ? globalSettings.emojiGroup + ' ' : ''}
+                      {localProduct.link}
+                    </p>
                     <div className="h-3" />
-                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-tighter">{localProduct.labelGroupLink || "Link do grupo"}:</p>
-                    <p className="text-[11px] text-blue-600 underline truncate">{localProduct.groupLink}</p>
+                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-tighter">{localProduct.labelGroupLink ?? globalSettings.labelGroupLink}</p>
+                    <p className={cn(
+                      "text-[11px] underline truncate",
+                      globalSettings.themeColor === 'blue' && "text-blue-600",
+                      globalSettings.themeColor === 'emerald' && "text-emerald-600",
+                      globalSettings.themeColor === 'pink' && "text-pink-600",
+                      globalSettings.themeColor === 'orange' && "text-orange-600",
+                      globalSettings.themeColor === 'indigo' && "text-indigo-600",
+                      globalSettings.themeColor === 'slate' && "text-slate-800"
+                    )}>{localProduct.groupLink}</p>
                   </div>
                   <div className="flex justify-end gap-1.5 mt-1 pr-1 items-center">
                     <span className="text-[10px] text-slate-400 font-bold">14:32</span>
-                    <div className="flex text-blue-400 -space-x-1 scale-75 origin-right">
+                    <div className={cn(
+                      "flex -space-x-1 scale-75 origin-right",
+                      globalSettings.themeColor === 'blue' && "text-blue-400",
+                      globalSettings.themeColor === 'emerald' && "text-emerald-400",
+                      globalSettings.themeColor === 'pink' && "text-pink-400",
+                      globalSettings.themeColor === 'orange' && "text-orange-400",
+                      globalSettings.themeColor === 'indigo' && "text-indigo-400",
+                      globalSettings.themeColor === 'slate' && "text-slate-500"
+                    )}>
                        <Check size={14} />
                        <Check size={14} />
                     </div>
