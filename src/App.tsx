@@ -28,7 +28,8 @@ import {
   LogIn,
   Search,
   Tag,
-  PartyPopper
+  PartyPopper,
+  Percent
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
@@ -76,6 +77,7 @@ interface Product {
   link: string;
   groupLink: string;
   category: string;
+  store?: string;
   addedAt: number;
   labelOriginalPrice?: string;
   labelPrice?: string;
@@ -194,6 +196,77 @@ export default function App() {
 
   // Local state for smooth editing
   const [localProduct, setLocalProduct] = useState<Product | null>(null);
+  const [discountPercent, setDiscountPercent] = useState('');
+  const [priceBeforeDiscount, setPriceBeforeDiscount] = useState<string | null>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  // PWA & Service Worker Registration
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').then(
+          (registration) => console.log('SW registered:', registration.scope),
+          (err) => console.log('SW register failed:', err)
+        );
+      });
+    }
+
+    const handleBeforeInstall = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      console.log('User accepted install');
+      setDeferredPrompt(null);
+    }
+  };
+
+  const applyPercentageDiscount = () => {
+    if (!localProduct || !discountPercent) return;
+    
+    // Parse current price
+    const currentPriceStr = localProduct.price.replace(',', '.');
+    const currentPrice = parseFloat(currentPriceStr);
+    
+    if (isNaN(currentPrice)) {
+      toast.error("Preço atual inválido para calcular desconto");
+      return;
+    }
+    
+    const percentage = parseFloat(discountPercent.replace(',', '.'));
+    if (isNaN(percentage)) {
+      toast.error("Porcentagem de desconto inválida");
+      return;
+    }
+    
+    // Save current price before applying
+    setPriceBeforeDiscount(localProduct.price);
+    
+    const discountAmount = currentPrice * (percentage / 100);
+    const newPrice = (currentPrice - discountAmount).toFixed(2);
+    
+    handleLocalUpdate({ price: newPrice.replace('.', ',') });
+    setDiscountPercent(''); // Clear after applying
+    toast.success(`Desconto de ${percentage}% aplicado!`);
+  };
+
+  const undoDiscount = () => {
+    if (priceBeforeDiscount && localProduct) {
+      handleLocalUpdate({ price: priceBeforeDiscount });
+      setPriceBeforeDiscount(null);
+      toast("Preço original restaurado", { icon: '🔄' });
+    }
+  };
 
   // Auth State
   useEffect(() => {
@@ -511,6 +584,7 @@ export default function App() {
         link: data.originalLink,
         groupLink: globalSettings.groupLink,
         category: autoCategorize(data.title),
+        store: data.store || 'Mercado Livre',
         addedAt: Date.now(),
         isHighlight: false,
       };
@@ -587,7 +661,7 @@ export default function App() {
       p.isHighlight ? `🚨 🎉 *SUPER OFERTA* 🎉 🚨` : null,
       p.isHighlight ? `-------------------------` : null,
       `${globalSettings.showEmojiTitle ? globalSettings.emojiTitle + ' ' : ''}*${p.title}*`,
-      `_Site Oficial Mercado Livre_`,
+      `_Site Oficial ${p.store || 'Mercado Livre'}_`,
       ``,
       p.originalPrice ? `${globalSettings.showEmojiPriceOriginal ? globalSettings.emojiPriceOriginal + ' ' : ''}${getEffectiveLabel(p.labelOriginalPrice, globalSettings.labelOriginalPrice)} ~R$ ${p.originalPrice}~` : null,
       `${globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}${getEffectiveLabel(p.labelPrice, globalSettings.labelPrice)} *R$ ${p.price}*`,
@@ -808,6 +882,7 @@ export default function App() {
             link: item.link || '',
             groupLink: globalSettings.groupLink,
             category: item.category || autoCategorize(item.title),
+            store: item.store || 'Mercado Livre',
             addedAt: Date.now(),
             isHighlight: false,
           })
@@ -1188,6 +1263,14 @@ export default function App() {
           </div>
         </div>
         <div className="flex gap-3">
+          {deferredPrompt && (
+            <button 
+              onClick={handleInstallClick}
+              className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-blue-700 transition-all border border-blue-500"
+            >
+              <Smartphone size={14} /> Instalar App
+            </button>
+          )}
           <button 
             onClick={() => setIsSettingsOpen(true)}
             className="hidden md:flex items-center gap-2 bg-white px-4 py-2 rounded-lg text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50 border border-slate-200 transition-all"
@@ -1252,7 +1335,84 @@ export default function App() {
                 <div 
                   draggable
                   onDragStart={(e) => {
-                    const script = `javascript:(function(){const items=[];let productData=null;let interceptedLink=null;const originalExec=document.execCommand;document.execCommand=function(cmd){if(cmd==='copy'){const activeEl=document.activeElement;const val=activeEl?.value||activeEl?.innerText||'';if(val.includes('mercadolivre.com')||val.includes('meli.la')){interceptedLink=val;}}return originalExec.apply(this,arguments)};const originalWrite=navigator.clipboard.writeText;navigator.clipboard.writeText=function(text){if(text.includes('mercadolivre.com')||text.includes('meli.la')){interceptedLink=text;}return originalWrite.apply(this,arguments)};const getP=(b)=>{if(!b)return null;let f=b.querySelector('.andes-money-amount__fraction')?.innerText.replace(/[^0-9]/g,'');let c=b.querySelector('.andes-money-amount__cents')?.innerText.replace(/[^0-9]/g,'')||'00';if(!f){const t=b.innerText.trim();const m=t.match(/(\\d+)[,\\.](\\d{2})/);if(m){f=m[1];c=m[2]}else{f=t.replace(/[^0-9]/g,'');c='00';}}return f?f+','+c:null};const getI=(el)=>{const img=el.querySelector('img');if(!img)return'';return img.getAttribute('data-src')||img.getAttribute('src')||img.getAttribute('data-lazy')||img.src||'';};const scrapeProduct=()=>{const pdpT=document.querySelector('.ui-pdp-title');if(pdpT){const t=pdpT.innerText.trim();const i=getI(document.querySelector('.ui-pdp-gallery')||document);const prices=Array.from(document.querySelectorAll('.ui-pdp-price .andes-money-amount'));const cur=prices.find(a=>!a.classList.contains('andes-money-amount--previous')&&!a.closest('.ui-pdp-installments'));const old=prices.find(a=>a.classList.contains('andes-money-amount--previous'));const p=getP(cur);const o=getP(old);let cp='';const cpEl=document.querySelector('.ui-pdp-promotions-pill-label, .ui-pdp-vpp-label');if(cpEl){const m=cpEl.innerText.toUpperCase().match(/[A-Z0-9]{4,}/);if(m)cp=m[0]}if(p)return{title:t,image:i,price:p,originalPrice:o||'',coupon:cp,link:window.location.href.split('?')[0]}}return null};const finalize=()=>{const details=productData;if(details){details.link=interceptedLink||details.link;items.push(details)}const cards=document.querySelectorAll('.ui-search-result, .poly-card, .promotion-item, .andes-card, .ui-search-layout__item, .social-selling-card, .ui-search-result__wrapper');cards.forEach(c=>{const tEl=c.querySelector('.ui-search-item__title, .poly-component__title, .promotion-item__title, h2, h3, .card-title, .poly-card__title, .poly-component__title-link');if(!tEl)return;const t=tEl.innerText.trim();const img=getI(c);const prices=Array.from(c.querySelectorAll('.andes-money-amount'));const cur=prices.find(a=>!a.classList.contains('andes-money-amount--previous')&&!a.closest('.ui-search-installments'));const old=prices.find(a=>a.classList.contains('andes-money-amount--previous'));const p=getP(cur);const o=getP(old);let l=c.querySelector('a')?.href;if(l&&p)items.push({title:t,image:img,price:p,originalPrice:o||'',coupon:'',link:l})});document.execCommand=originalExec;navigator.clipboard.writeText=originalWrite;if(items.length){const unique=Array.from(new Map(items.map(it=>[it.link,it])).values());const json=JSON.stringify(unique);const el=document.createElement('textarea');el.value=json;document.body.appendChild(el);el.select();originalExec.call(document,'copy');document.body.removeChild(el);alert('🚀 PRODUTOS CAPTURADOS: '+unique.length+'\\n\\nCapturamos os valores REAIS da tela. Agora basta Colar (Ctrl+V) no app.')}else{alert('❌ Nenhum produto encontrado.')}};productData=scrapeProduct();const step2=(attempts=0)=>{const copyBtn=Array.from(document.querySelectorAll('button, span, div, li')).find(b=>b.innerText.toLowerCase().includes('copiar link'));if(copyBtn){copyBtn.click();setTimeout(finalize,600)}else if(attempts<10){setTimeout(()=>step2(attempts+1),200)}else{finalize()}};const shareBtn=Array.from(document.querySelectorAll('button, a, .social-selling-button')).find(b=>b.innerText.includes('Compartilhar')||b.innerText.includes('Ganhar')||b.className?.includes('share'));if(shareBtn&&productData){shareBtn.click();setTimeout(step2,1200)}else{finalize()}})();`;
+                    const script = `javascript:(function(){
+const items=[];
+let productData=null;
+let interceptedLink=null;
+const originalExec=document.execCommand;
+document.execCommand=function(cmd){if(cmd==='copy'){const activeEl=document.activeElement;const val=activeEl?.value||activeEl?.innerText||'';if(val.includes('mercadolivre.com')||val.includes('meli.la')||val.includes('shopee.com')||val.includes('amazon.com')||val.includes('aliexpress.com')){interceptedLink=val;}}return originalExec.apply(this,arguments)};
+const originalWrite=navigator.clipboard.writeText;
+navigator.clipboard.writeText=function(text){if(text.includes('mercadolivre.com')||text.includes('meli.la')||text.includes('shopee.com')||text.includes('amazon.com')||text.includes('aliexpress.com')){interceptedLink=text;}return originalWrite.apply(this,arguments)};
+
+const getP=(b)=>{
+  if(!b)return null;
+  let f=b.querySelector('.andes-money-amount__fraction, .shopee-price, #priceblock_ourprice, .priceToPay, .product-price-value')?.innerText.replace(/[^0-9,.]/g,'');
+  if(!f){
+    const t=b.innerText.trim();
+    const m=t.match(/(\\d+)[,\\.](\\d{2})/);
+    if(m){f=m[0]}else{f=t.replace(/[^0-9,.]/g,'');}
+  }
+  return f?f.replace('.',','):null;
+};
+
+const getI=(el)=>{
+  const img=el.querySelector('img');
+  if(!img)return'';
+  return img.getAttribute('data-src')||img.getAttribute('src')||img.getAttribute('data-lazy')||img.src||'';
+};
+
+const getStore=()=>{
+  const h=window.location.hostname;
+  if(h.includes('mercadolivre'))return'Mercado Livre';
+  if(h.includes('shopee'))return'Shopee';
+  if(h.includes('amazon'))return'Amazon';
+  if(h.includes('aliexpress'))return'AliExpress';
+  return'Loja Oficial';
+};
+
+const scrapeProduct=()=>{
+  const tEl=document.querySelector('.ui-pdp-title, .shopee-product-info__header__text, #productTitle, .product-title-text');
+  if(tEl){
+    const t=tEl.innerText.trim();
+    const i=getI(document.querySelector('.ui-pdp-gallery, .shopee-product-images, #imgTagWrapperId, .image-view-magnifier-wrap')||document);
+    const pEl=document.querySelector('.ui-pdp-price .andes-money-amount, .shopee-price, .priceToPay, .product-price-value');
+    const p=getP(pEl);
+    const oEl=document.querySelector('.andes-money-amount--previous, .shopee-price-before-discount, .basisPrice, .product-price-del');
+    const o=getP(oEl);
+    let cp='';
+    const cpEl=document.querySelector('.ui-pdp-promotions-pill-label, .shopee-voucher-ticket, .coupon-code');
+    if(cpEl){const m=cpEl.innerText.toUpperCase().match(/[A-Z0-9]{4,}/);if(m)cp=m[0]}
+    if(p)return{title:t,image:i,price:p,originalPrice:o||'',coupon:cp,link:window.location.href.split('?')[0],store:getStore()}
+  }
+  return null;
+};
+
+const finalize=()=>{
+  const details=productData;
+  if(details){details.link=interceptedLink||details.link;items.push(details)}
+  const cards=document.querySelectorAll('.ui-search-result, .shopee-search-item-result__item, .s-result-item, .search-item, .poly-card');
+  cards.forEach(c=>{
+    const tEl=c.querySelector('.ui-search-item__title, .shopee-item-card__name, h2, .product-title');
+    if(!tEl)return;
+    const t=tEl.innerText.trim();
+    const img=getI(c);
+    const pEl=c.querySelector('.andes-money-amount, .shopee-item-card__current-price, .a-price, .price-current');
+    const p=getP(pEl);
+    if(p)items.push({title:t,image:img,price:p,originalPrice:'',coupon:'',link:c.querySelector('a')?.href||'',store:getStore()})
+  });
+  document.execCommand=originalExec;navigator.clipboard.writeText=originalWrite;
+  if(items.length){
+    const unique=Array.from(new Map(items.map(it=>[it.link,it])).values());
+    const json=JSON.stringify(unique);
+    const el=document.createElement('textarea');el.value=json;document.body.appendChild(el);el.select();originalExec.call(document,'copy');document.body.removeChild(el);
+    alert('🚀 '+getStore()+' CAPTURADO! '+unique.length+'\\n\\nAgora basta Colar (Ctrl+V) no app.')
+  }else{alert('❌ Nenhum produto encontrado.')}
+};
+
+productData=scrapeProduct();
+const shareBtn=Array.from(document.querySelectorAll('button, a')).find(b=>b.innerText.includes('Compartilhar')||b.innerText.includes('Ganhar')||b.className?.includes('share'));
+if(shareBtn&&productData){shareBtn.click();setTimeout(finalize,1500)}else{finalize()}
+})();`;
                     e.dataTransfer.setData('text/plain', script);
                     e.dataTransfer.setData('text/uri-list', script);
                   }}
@@ -1490,6 +1650,34 @@ export default function App() {
                     placeholder={globalSettings.labelCoupon || "Cupom Ativo:"}
                     className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
                   />
+                  
+                  {/* Calculadora de Desconto */}
+                  <div className="flex items-center gap-1 bg-slate-50 rounded-lg p-0.5 px-1.5 border border-slate-200">
+                    <span className="text-[9px] font-black text-slate-400 uppercase">Desconto:</span>
+                    <input 
+                      type="text"
+                      value={discountPercent}
+                      onChange={(e) => setDiscountPercent(e.target.value)}
+                      placeholder=""
+                      className="w-10 text-[10px] font-bold bg-white border border-slate-200 rounded px-1 h-4 text-center focus:ring-1 focus:ring-blue-400 focus:outline-none"
+                    />
+                    <span className="text-[10px] font-bold text-slate-400">%</span>
+                    <button 
+                      onClick={applyPercentageDiscount}
+                      className="text-[9px] font-black uppercase text-blue-600 hover:bg-blue-50 px-1 rounded transition-colors"
+                    >
+                      Aplicar
+                    </button>
+                    {priceBeforeDiscount && (
+                      <button 
+                        onClick={undoDiscount}
+                        className="text-[9px] font-black uppercase text-rose-500 hover:bg-rose-50 px-1 rounded transition-colors border-l border-slate-200"
+                      >
+                        Voltar
+                      </button>
+                    )}
+                  </div>
+
                   {localProduct.coupon && (
                     <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-bold animate-pulse">Detectado</span>
                   )}
@@ -1679,7 +1867,7 @@ export default function App() {
                       {globalSettings.showEmojiTitle ? globalSettings.emojiTitle + ' ' : ''}
                       {localProduct.title}
                     </p>
-                    <p className="text-[12px] italic text-slate-400 font-serif">Site Oficial Mercado Livre</p>
+                    <p className="text-[12px] italic text-slate-400 font-serif">Site Oficial {localProduct.store || 'Mercado Livre'}</p>
                     {localProduct.originalPrice && (
                       <p className="text-[12px] text-slate-400">
                         {globalSettings.showEmojiPriceOriginal ? globalSettings.emojiPriceOriginal + ' ' : ''}

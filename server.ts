@@ -52,9 +52,27 @@ async function startServer() {
       });
       const $ = cheerio.load(response.data);
       
-      const title = $('.ui-pdp-title').text().trim() || $('meta[property="og:title"]').attr('content') || $('title').text().trim();
-      const image = $('.ui-pdp-image').attr('data-zoom') || $('.ui-pdp-image').attr('src') || $('meta[property="og:image"]').attr('content');
+      const title = $('.ui-pdp-title').text().trim() || 
+                    $('.shopee-product-info__header__text').text().trim() ||
+                    $('#productTitle').text().trim() ||
+                    $('.product-title-text').text().trim() ||
+                    $('meta[property="og:title"]').attr('content') || 
+                    $('title').text().trim();
+                    
+      const image = $('.ui-pdp-image').attr('data-zoom') || 
+                    $('.ui-pdp-image').attr('src') || 
+                    $('.shopee-product-images img').attr('src') ||
+                    $('#imgTagWrapperId img').attr('src') ||
+                    $('.image-view-magnifier-wrap img').attr('src') ||
+                    $('meta[property="og:image"]').attr('content');
       
+      // Attempt to find store name
+      let store = "Loja Oficial";
+      if (url.includes('mercadolivre.com') || url.includes('meli.la')) store = "Mercado Livre";
+      else if (url.includes('shopee.com')) store = "Shopee";
+      else if (url.includes('amazon.com')) store = "Amazon";
+      else if (url.includes('aliexpress.com')) store = "AliExpress";
+
       // Attempt to find price in standard ML patterns
       let price = "";
       let originalPrice = "";
@@ -65,20 +83,16 @@ async function startServer() {
         const $el = $(el);
         if ($el.closest('.ui-pdp-installments, .ui-search-installments').length > 0) return;
         
-        // ML frequently uses separate elements for fraction and cents
         let fraction = $el.find('.andes-money-amount__fraction').text().trim().replace(/[^0-9]/g, '');
         let cents = $el.find('.andes-money-amount__cents').text().trim().replace(/[^0-9]/g, '');
         
-        // If we don't find the fraction element, try to parse from the main text
         if (!fraction) {
            const fullText = $el.text().trim();
-           // Matches things like 29,90 or 29.90
            const match = fullText.match(/(\d+)[,\.](\d{2})/);
            if (match) {
              fraction = match[1];
              cents = match[2];
            } else {
-             // If no decimal, matching just numbers
              fraction = fullText.replace(/[^0-9]/g, '');
              cents = "00";
            }
@@ -91,17 +105,66 @@ async function startServer() {
         }
       });
 
-      // Original Price: O que tem a classe de "previous"
-      const originalObj = allPrices.find(p => p.isPrevious);
-      if (originalObj) {
-        originalPrice = `${originalObj.fraction},${originalObj.cents}`;
+      // Price extraction for other stores
+      if (allPrices.length === 0) {
+          const genericPriceSelectors = [
+              '.shopee-price', 
+              '.priceToPay', 
+              '.product-price-value',
+              '.a-offscreen',
+              '[itemprop="price"]'
+          ];
+          
+          for (const selector of genericPriceSelectors) {
+              const text = $(selector).first().text().trim();
+              if (text) {
+                  const match = text.match(/(\d+)[,\.](\d{2})/);
+                  if (match) {
+                      price = `${match[1]},${match[2]}`;
+                      break;
+                  } else {
+                      const simpleMatch = text.replace(/[^0-9]/g, '');
+                      if (simpleMatch) {
+                          price = simpleMatch;
+                          break;
+                      }
+                  }
+              }
+          }
+
+          const genericOriginalPriceSelectors = [
+              '.shopee-price-before-discount',
+              '.basisPrice',
+              '.product-price-del',
+              '.a-text-strike'
+          ];
+
+          for (const selector of genericOriginalPriceSelectors) {
+            const text = $(selector).first().text().trim();
+            if (text) {
+                const match = text.match(/(\d+)[,\.](\d{2})/);
+                if (match) {
+                    originalPrice = `${match[1]},${match[2]}`;
+                    break;
+                }
+            }
+          }
       }
 
-      // Current Price: O que NÃO tem a classe de "previous"
-      // Se houver múltiplos, pegamos o primeiro que não seja o original
-      const currentObj = allPrices.find(p => !p.isPrevious);
-      if (currentObj) {
-        price = `${currentObj.fraction},${currentObj.cents}`;
+      // Original Price from ML Pattern
+      if (!originalPrice) {
+        const originalObj = allPrices.find(p => p.isPrevious);
+        if (originalObj) {
+          originalPrice = `${originalObj.fraction},${originalObj.cents}`;
+        }
+      }
+
+      // Current Price from ML Pattern
+      if (!price) {
+        const currentObj = allPrices.find(p => !p.isPrevious);
+        if (currentObj) {
+          price = `${currentObj.fraction},${currentObj.cents}`;
+        }
       }
 
       // Fallback 1: Meta tags (Geralmente preço atual)
@@ -116,12 +179,13 @@ async function startServer() {
         price = `${allPrices[0].fraction},${allPrices[0].cents}`;
       }
 
-      // 4. Find Coupons (New Logic)
+      // 4. Find Coupons
       let coupon = "";
       const couponSelectors = [
         '.ui-pdp-promotions-pill-label',
+        '.shopee-voucher-ticket',
+        '.coupon-code',
         '.ui-pdp-promotions__title',
-        '.ui-pdp-media__title',
         '.ui-pdp-vpp-label'
       ];
       
@@ -147,6 +211,7 @@ async function startServer() {
         price,
         originalPrice,
         coupon,
+        store,
         originalLink: url
       });
     } catch (error) {
