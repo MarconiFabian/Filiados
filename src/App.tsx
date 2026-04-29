@@ -55,7 +55,9 @@ import {
   addDoc, 
   deleteDoc, 
   updateDoc,
-  serverTimestamp 
+  serverTimestamp,
+  writeBatch,
+  deleteField
 } from 'firebase/firestore';
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
@@ -90,10 +92,12 @@ interface GlobalSettings {
   labelPrice: string;
   labelCoupon: string;
   labelGroupLink: string;
+  emojiPriceOriginal: string;
   emojiTitle: string;
   emojiPrice: string;
   emojiCoupon: string;
   emojiGroup: string;
+  showEmojiPriceOriginal: boolean;
   showEmojiTitle: boolean;
   showEmojiPrice: boolean;
   showEmojiCoupon: boolean;
@@ -174,10 +178,12 @@ export default function App() {
     labelPrice: 'por',
     labelCoupon: 'Cupom:',
     labelGroupLink: 'Link do Grupo:',
+    emojiPriceOriginal: '💰',
     emojiTitle: '➡️',
     emojiPrice: '🔥',
     emojiCoupon: '🏷️',
     emojiGroup: '🛒',
+    showEmojiPriceOriginal: false,
     showEmojiTitle: true,
     showEmojiPrice: true,
     showEmojiCoupon: true,
@@ -229,10 +235,12 @@ export default function App() {
           labelPrice: data.labelPrice ?? 'por',
           labelCoupon: data.labelCoupon ?? 'Cupom:',
           labelGroupLink: data.labelGroupLink ?? 'Link do Grupo:',
+          emojiPriceOriginal: data.emojiPriceOriginal || '💰',
           emojiTitle: data.emojiTitle || '➡️',
           emojiPrice: data.emojiPrice || '🔥',
           emojiCoupon: data.emojiCoupon || '🏷️',
           emojiGroup: data.emojiGroup || '🛒',
+          showEmojiPriceOriginal: data.showEmojiPriceOriginal ?? false,
           showEmojiTitle: data.showEmojiTitle ?? true,
           showEmojiPrice: data.showEmojiPrice ?? true,
           showEmojiCoupon: data.showEmojiCoupon ?? true,
@@ -251,10 +259,12 @@ export default function App() {
           labelPrice: 'por',
           labelCoupon: 'Cupom:',
           labelGroupLink: 'Link do Grupo:',
+          emojiPriceOriginal: '💰',
           emojiTitle: '➡️',
           emojiPrice: '🔥',
           emojiCoupon: '🏷️',
           emojiGroup: '🛒',
+          showEmojiPriceOriginal: false,
           showEmojiTitle: true,
           showEmojiPrice: true,
           showEmojiCoupon: true,
@@ -374,6 +384,47 @@ export default function App() {
 
   const lastCelebratedId = useRef<string | null>(null);
   const lastCelebrateState = useRef<boolean>(false);
+  const migrationDone = useRef(false);
+
+  // Migration: Clear local labels if they match common defaults to allow global settings to work
+  useEffect(() => {
+    if (!products.length || !user || migrationDone.current) return;
+    
+    const defaultLabels = [
+      'de:', 'de', 'por', 'por:', 'cupom:', 'cupom ativo:', 
+      'link do grupo:', 'link do grupo', 'rótulo: preço original',
+      'rótulo: preço promo', 'rótulo: cupom', 'rótulo: link grupo'
+    ];
+
+    const isGeneric = (val: string | undefined) => {
+      if (!val) return false;
+      return defaultLabels.includes(val.toLowerCase().trim());
+    };
+
+    const productsToFix = products.filter(p => 
+      isGeneric(p.labelOriginalPrice) ||
+      isGeneric(p.labelPrice) ||
+      isGeneric(p.labelCoupon) ||
+      isGeneric(p.labelGroupLink)
+    );
+
+    if (productsToFix.length > 0) {
+      migrationDone.current = true;
+      const batch = writeBatch(db);
+      productsToFix.forEach(p => {
+        const docRef = doc(db, `users/${user.uid}/products`, p.id);
+        const updates: any = {};
+        if (isGeneric(p.labelOriginalPrice)) updates.labelOriginalPrice = deleteField();
+        if (isGeneric(p.labelPrice)) updates.labelPrice = deleteField();
+        if (isGeneric(p.labelCoupon)) updates.labelCoupon = deleteField();
+        if (isGeneric(p.labelGroupLink)) updates.labelGroupLink = deleteField();
+        batch.update(docRef, updates);
+      });
+      batch.commit().then(() => {
+        toast.success("Produtos sincronizados com as Configurações Globais!");
+      }).catch(err => console.error("Migration error:", err));
+    }
+  }, [products, user]);
 
   // Sync local state when selection changes
   useEffect(() => {
@@ -460,10 +511,6 @@ export default function App() {
         link: data.originalLink,
         groupLink: globalSettings.groupLink,
         category: autoCategorize(data.title),
-        labelOriginalPrice: globalSettings.labelOriginalPrice,
-        labelPrice: globalSettings.labelPrice,
-        labelCoupon: globalSettings.labelCoupon,
-        labelGroupLink: globalSettings.labelGroupLink,
         addedAt: Date.now(),
         isHighlight: false,
       };
@@ -518,6 +565,23 @@ export default function App() {
     toast.success("Abrindo Painel de Afiliados...", { icon: '🔗' });
   };
 
+  // Helper to determine which label to show, ignoring generic defaults
+  const getEffectiveLabel = (productLabel: string | undefined, globalLabel: string) => {
+    if (!productLabel || !productLabel.trim()) return globalLabel;
+    
+    const genericDefaults = [
+      'de:', 'de', 'por:', 'por', 'cupom:', 'cupom ativo:', 
+      'link do grupo:', 'link do grupo', 'rótulo: preço original',
+      'rótulo: preço promo', 'rótulo: cupom', 'rótulo: link grupo'
+    ];
+    
+    if (genericDefaults.includes(productLabel.toLowerCase().trim())) {
+      return globalLabel;
+    }
+    
+    return productLabel;
+  };
+
   const formatText = (p: Product) => {
     const lines = [
       p.isHighlight ? `🚨 🎉 *SUPER OFERTA* 🎉 🚨` : null,
@@ -525,13 +589,13 @@ export default function App() {
       `${globalSettings.showEmojiTitle ? globalSettings.emojiTitle + ' ' : ''}*${p.title}*`,
       `_Site Oficial Mercado Livre_`,
       ``,
-      p.originalPrice ? `${p.labelOriginalPrice ?? globalSettings.labelOriginalPrice} ~R$ ${p.originalPrice}~` : null,
-      `${globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}${p.labelPrice ?? globalSettings.labelPrice} *R$ ${p.price}*`,
-      p.coupon ? `${globalSettings.showEmojiCoupon ? globalSettings.emojiCoupon + ' ' : ''}${p.labelCoupon ?? globalSettings.labelCoupon} *${p.coupon}*` : null,
+      p.originalPrice ? `${globalSettings.showEmojiPriceOriginal ? globalSettings.emojiPriceOriginal + ' ' : ''}${getEffectiveLabel(p.labelOriginalPrice, globalSettings.labelOriginalPrice)} ~R$ ${p.originalPrice}~` : null,
+      `${globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}${getEffectiveLabel(p.labelPrice, globalSettings.labelPrice)} *R$ ${p.price}*`,
+      p.coupon ? `${globalSettings.showEmojiCoupon ? globalSettings.emojiCoupon + ' ' : ''}${getEffectiveLabel(p.labelCoupon, globalSettings.labelCoupon)} *${p.coupon}*` : null,
       ``,
       `${globalSettings.showEmojiGroup ? globalSettings.emojiGroup + ' ' : ''}${p.link}`,
       ``,
-      `${p.labelGroupLink ?? globalSettings.labelGroupLink}`,
+      `${getEffectiveLabel(p.labelGroupLink, globalSettings.labelGroupLink)}`,
       `${p.groupLink}`
     ].filter(v => v !== null);
 
@@ -744,10 +808,6 @@ export default function App() {
             link: item.link || '',
             groupLink: globalSettings.groupLink,
             category: item.category || autoCategorize(item.title),
-            labelOriginalPrice: globalSettings.labelOriginalPrice,
-            labelPrice: globalSettings.labelPrice,
-            labelCoupon: globalSettings.labelCoupon,
-            labelGroupLink: globalSettings.labelGroupLink,
             addedAt: Date.now(),
             isHighlight: false,
           })
@@ -989,7 +1049,8 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {[
                       { key: 'emojiTitle', showKey: 'showEmojiTitle', label: 'Emoji do Título', current: globalSettings.emojiTitle, active: globalSettings.showEmojiTitle },
-                      { key: 'emojiPrice', showKey: 'showEmojiPrice', label: 'Emoji do Preço', current: globalSettings.emojiPrice, active: globalSettings.showEmojiPrice },
+                      { key: 'emojiPriceOriginal', showKey: 'showEmojiPriceOriginal', label: 'Emoji Preço Original (De:)', current: globalSettings.emojiPriceOriginal, active: globalSettings.showEmojiPriceOriginal },
+                      { key: 'emojiPrice', showKey: 'showEmojiPrice', label: 'Emoji do Preço (Por:)', current: globalSettings.emojiPrice, active: globalSettings.showEmojiPrice },
                       { key: 'emojiCoupon', showKey: 'showEmojiCoupon', label: 'Emoji do Cupom', current: globalSettings.emojiCoupon, active: globalSettings.showEmojiCoupon },
                       { key: 'emojiGroup', showKey: 'showEmojiGroup', label: 'Emoji de Link/Grupo', current: globalSettings.emojiGroup, active: globalSettings.showEmojiGroup },
                     ].map((item) => (
@@ -1386,7 +1447,7 @@ export default function App() {
                     type="text"
                     value={localProduct.labelOriginalPrice}
                     onChange={(e) => handleLocalUpdate({ labelOriginalPrice: e.target.value })}
-                    placeholder="De:"
+                    placeholder={globalSettings.labelOriginalPrice || "De:"}
                     className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
                   />
                   <div className="relative">
@@ -1405,7 +1466,7 @@ export default function App() {
                     type="text"
                     value={localProduct.labelPrice}
                     onChange={(e) => handleLocalUpdate({ labelPrice: e.target.value })}
-                    placeholder="Por:"
+                    placeholder={globalSettings.labelPrice || "Por:"}
                     className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
                   />
                   <div className="relative">
@@ -1426,7 +1487,7 @@ export default function App() {
                     type="text"
                     value={localProduct.labelCoupon}
                     onChange={(e) => handleLocalUpdate({ labelCoupon: e.target.value })}
-                    placeholder="Cupom Ativo:"
+                    placeholder={globalSettings.labelCoupon || "Cupom Ativo:"}
                     className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full"
                   />
                   {localProduct.coupon && (
@@ -1447,7 +1508,7 @@ export default function App() {
                   type="text"
                   value={localProduct.labelGroupLink}
                   onChange={(e) => handleLocalUpdate({ labelGroupLink: e.target.value })}
-                  placeholder="Link do Grupo:"
+                  placeholder={globalSettings.labelGroupLink || "Link do Grupo:"}
                   className="text-[10px] font-black text-slate-500 uppercase tracking-tight bg-transparent border-none p-0 focus:ring-0 focus:outline-none w-full mb-1.5"
                 />
                 <div className="relative">
@@ -1620,17 +1681,20 @@ export default function App() {
                     </p>
                     <p className="text-[12px] italic text-slate-400 font-serif">Site Oficial Mercado Livre</p>
                     {localProduct.originalPrice && (
-                      <p className="text-[12px] text-slate-400">{localProduct.labelOriginalPrice ?? globalSettings.labelOriginalPrice} <span className="line-through">R$ {localProduct.originalPrice}</span></p>
+                      <p className="text-[12px] text-slate-400">
+                        {globalSettings.showEmojiPriceOriginal ? globalSettings.emojiPriceOriginal + ' ' : ''}
+                        {getEffectiveLabel(localProduct.labelOriginalPrice, globalSettings.labelOriginalPrice)} <span className="line-through">R$ {localProduct.originalPrice}</span>
+                      </p>
                     )}
                     <div className="h-2" />
                     <p className="text-[13px]">
                       {globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}
-                      {localProduct.labelPrice ?? globalSettings.labelPrice} <span className="font-bold">R$ {localProduct.price}</span>
+                      {getEffectiveLabel(localProduct.labelPrice, globalSettings.labelPrice)} <span className="font-bold">R$ {localProduct.price}</span>
                     </p>
                     {localProduct.coupon && (
                       <p className="text-[13px]">
                         {globalSettings.showEmojiCoupon ? globalSettings.emojiCoupon + ' ' : ''}
-                        {localProduct.labelCoupon ?? globalSettings.labelCoupon} <span className={cn(
+                        {getEffectiveLabel(localProduct.labelCoupon, globalSettings.labelCoupon)} <span className={cn(
                           "font-bold underline decoration-2",
                           globalSettings.themeColor === 'blue' && "decoration-blue-400",
                           globalSettings.themeColor === 'emerald' && "decoration-emerald-400",
@@ -1655,7 +1719,7 @@ export default function App() {
                       {localProduct.link}
                     </p>
                     <div className="h-3" />
-                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-tighter">{localProduct.labelGroupLink ?? globalSettings.labelGroupLink}</p>
+                    <p className="text-[11px] font-black text-slate-400 uppercase tracking-tighter">{getEffectiveLabel(localProduct.labelGroupLink, globalSettings.labelGroupLink)}</p>
                     <p className={cn(
                       "text-[11px] underline truncate",
                       globalSettings.themeColor === 'blue' && "text-blue-600",
