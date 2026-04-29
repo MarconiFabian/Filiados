@@ -704,8 +704,8 @@ export default function App() {
       
       if (shareStep === 1) {
         const encodedText = encodeURIComponent(text);
-        // Using api.whatsapp.com is more compatible across all platforms than the protocol whatsapp://
-        window.open(`https://api.whatsapp.com/send?text=${encodedText}`, '_blank');
+        // Using protocol to force opening the installed app directly
+        window.location.href = `whatsapp://send?text=${encodedText}`;
         toast.success("Texto enviado! Clique no Passo 2 agora.", { duration: 4000 });
         setShareStep(2);
       } else {
@@ -735,8 +735,8 @@ export default function App() {
                       new ClipboardItem({ 'image/png': pngBlob })
                     ]);
                     toast.success("Foto copiada! Basta COLAR no WhatsApp.", { id: 'img-toast', duration: 5000 });
-                    // Open WhatsApp Web/Desktop landing page to trigger refocus
-                    window.open('https://api.whatsapp.com', '_blank');
+                    // Trigger refocus using the protocol
+                    window.location.href = 'whatsapp://';
                     setShareStep(1);
                     resolve(true);
                   } catch (clipErr) {
