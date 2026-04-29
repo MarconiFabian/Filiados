@@ -706,6 +706,26 @@ export default function App() {
         const encodedText = encodeURIComponent(text);
         // Using protocol to force opening the installed app directly
         window.location.href = `whatsapp://send?text=${encodedText}`;
+        
+        // Help user if browser blocks the redirect
+        setTimeout(() => {
+          toast((t) => (
+            <div className="flex flex-col gap-1">
+              <p className="text-xs font-bold leading-tight">O WhatsApp não abriu?</p>
+              <p className="text-[10px] text-slate-500 leading-tight">Verifique se o navegador bloqueou o redirecionamento (ícone no topo da página).</p>
+              <button 
+                onClick={() => {
+                  window.open(`https://api.whatsapp.com/send?text=${encodedText}`, '_blank');
+                  toast.dismiss(t.id);
+                }}
+                className="text-[10px] font-black text-blue-600 uppercase underline text-left mt-1"
+              >
+                Abrir via Web como alternativa
+              </button>
+            </div>
+          ), { duration: 8000, icon: '💡' });
+        }, 2500);
+
         toast.success("Texto enviado! Clique no Passo 2 agora.", { duration: 4000 });
         setShareStep(2);
       } else {
@@ -1789,6 +1809,18 @@ if(shareBtn&&productData){shareBtn.click();setTimeout(finalize,1500)}else{finali
                     {shareStep === 1 ? "1. POSTAR TEXTO NO WHATSAPP" : "2. COPIAR FOTO PARA COLAR"}
                   </span>
                 </button>
+              </div>
+
+              <div className="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-xl flex items-start gap-3">
+                <div className="p-2 bg-white rounded-lg shadow-sm">
+                  <Smartphone size={16} className="text-blue-600" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold text-blue-900 leading-tight">Problemas ao abrir o WhatsApp?</p>
+                  <p className="text-[10px] text-blue-700 mt-0.5 leading-snug">
+                    Se nada acontecer ao clicar no botão "Passo 1", procure um ícone de <b>"Pop-up bloqueado"</b> na barra de endereços do seu navegador e clique em <b>"Sempre permitir redirecionamentos"</b>.
+                  </p>
+                </div>
               </div>
             </div>
           ) : (
