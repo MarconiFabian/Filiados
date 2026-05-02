@@ -19,6 +19,7 @@ import {
   Copy,
   Check,
   Zap,
+  Target,
   Info,
   Smartphone,
   Sparkles,
@@ -29,7 +30,9 @@ import {
   Search,
   Tag,
   PartyPopper,
-  Percent
+  Percent,
+  Globe,
+  HelpCircle
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
@@ -84,6 +87,7 @@ interface Product {
   labelCoupon?: string;
   labelGroupLink?: string;
   isHighlight?: boolean;
+  selected?: boolean;
 }
 
 interface GlobalSettings {
@@ -162,6 +166,25 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+
+  const toggleAllSelection = (select: boolean) => {
+    if (!user) return;
+    const batch = writeBatch(db);
+    products.forEach(p => {
+      const pRef = doc(db, 'users', user.uid, 'products', p.id);
+      batch.update(pRef, { selected: select });
+    });
+    batch.commit().catch(err => console.error("Error toggling all:", err));
+  };
+
+  const toggleProductSelection = (id: string, current: boolean) => {
+    if (!user) return;
+    const pRef = doc(db, 'users', user.uid, 'products', id);
+    updateDoc(pRef, { selected: !current }).catch(err => console.error("Error toggling item:", err));
+  };
+
+  const selectedCount = products.filter(p => p.selected).length;
+
   const [inputUrl, setInputUrl] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
@@ -657,17 +680,25 @@ export default function App() {
   };
 
   const formatText = (p: Product) => {
+    const formatPrice = (price: string | number) => {
+      if (price === undefined || price === null || String(price).trim() === '') return '';
+      const p = String(price).replace(/R\$\s*/g, '').replace(/\s/g, '').trim();
+      if (/^\d+$/.test(p)) return `R$ ${p},00`;
+      if (/^\d+[\.,]\d$/.test(p)) return `R$ ${p.replace('.', ',')}0`;
+      return `R$ ${p.replace('.', ',')}`;
+    };
+
     const lines = [
       p.isHighlight ? `🚨 🎉 *SUPER OFERTA* 🎉 🚨` : null,
       p.isHighlight ? `-------------------------` : null,
       `${globalSettings.showEmojiTitle ? globalSettings.emojiTitle + ' ' : ''}*${p.title}*`,
       `_Site Oficial ${p.store || 'Mercado Livre'}_`,
       ``,
-      p.originalPrice ? `${globalSettings.showEmojiPriceOriginal ? globalSettings.emojiPriceOriginal + ' ' : ''}${getEffectiveLabel(p.labelOriginalPrice, globalSettings.labelOriginalPrice)} ~R$ ${p.originalPrice}~` : null,
-      `${globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}${getEffectiveLabel(p.labelPrice, globalSettings.labelPrice)} *R$ ${p.price}*`,
+      p.originalPrice ? `${globalSettings.showEmojiPriceOriginal ? globalSettings.emojiPriceOriginal + ' ' : ''}${getEffectiveLabel(p.labelOriginalPrice, globalSettings.labelOriginalPrice)} ~${formatPrice(p.originalPrice)}~` : null,
+      `${globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}${getEffectiveLabel(p.labelPrice, globalSettings.labelPrice)} *${formatPrice(p.price)}*`,
       p.coupon ? `${globalSettings.showEmojiCoupon ? globalSettings.emojiCoupon + ' ' : ''}${getEffectiveLabel(p.labelCoupon, globalSettings.labelCoupon)} *${p.coupon}*` : null,
       ``,
-      `${globalSettings.showEmojiGroup ? globalSettings.emojiGroup + ' ' : ''}${p.link}`,
+      p.link ? `${globalSettings.showEmojiGroup ? globalSettings.emojiGroup + ' ' : ''}${p.link}` : null,
       ``,
       `${getEffectiveLabel(p.labelGroupLink, globalSettings.labelGroupLink)}`,
       `${p.groupLink}`
@@ -704,12 +735,18 @@ export default function App() {
       
       if (shareStep === 1) {
         const encodedText = encodeURIComponent(text);
-        // Using api.whatsapp.com is more compatible across all platforms than the protocol whatsapp://
-        window.open(`https://api.whatsapp.com/send?text=${encodedText}`, '_blank');
-        toast.success("Texto enviado! Clique no Passo 2 agora.", { duration: 4000 });
+        // Try direct protocol first
+        window.location.href = `whatsapp://send?text=${encodedText}`;
+        // Backup: open web version in 1 second if app didn't respond (or just as second tab)
+        setTimeout(() => {
+          window.open(`https://web.whatsapp.com/send?text=${encodedText}`, '_blank');
+        }, 800);
+        
+        toast.success("Enviando texto! Agora clique no Passo 2.", { duration: 4000 });
         setShareStep(2);
       } else {
         toast.loading("Copiando foto...", { id: 'img-toast' });
+        
         const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(selectedProduct.image)}`;
         const response = await fetch(proxiedUrl);
         if (!response.ok) throw new Error("Erro na imagem");
@@ -735,11 +772,24 @@ export default function App() {
                       new ClipboardItem({ 'image/png': pngBlob })
                     ]);
                     toast.success("Foto copiada! Basta COLAR no WhatsApp.", { id: 'img-toast', duration: 5000 });
-                    // Open WhatsApp Web/Desktop landing page to trigger refocus
-                    window.open('https://api.whatsapp.com', '_blank');
+                    
+                    // Try to trigger app refocus via protocol
+                    window.location.href = "whatsapp://";
+                    
+                    // Backup: Open WhatsApp Web after a short delay to trigger focus
+                    setTimeout(() => {
+                      window.open('https://web.whatsapp.com', '_blank');
+                    }, 500);
+                    
                     setShareStep(1);
                     resolve(true);
-                  } catch (clipErr) {
+                  } catch (clipErr: any) {
+                    console.error("Clipboard Error:", clipErr);
+                    if (clipErr.name === 'NotAllowedError' || clipErr.message?.includes('focus')) {
+                      toast.error("O navegador bloqueou a cópia. Tente clicar no botão novamente sem mudar de aba.", { id: 'img-toast' });
+                    } else {
+                      toast.error("Erro ao copiar imagem. Tente novamente.", { id: 'img-toast' });
+                    }
                     reject(clipErr);
                   }
                 } else {
@@ -879,9 +929,9 @@ export default function App() {
             title: item.title || 'Produto sem título',
             image: item.image || '',
             price: item.price || '0,00',
-            originalPrice: item.originalPrice || '',
+            originalPrice: item.originalPrice || item.price_from || item.priceOriginal || '',
             coupon: item.coupon || globalSettings.defaultCoupon,
-            link: item.link || '',
+            link: item.affiliate_link || item.link || '',
             groupLink: globalSettings.groupLink,
             category: item.category || autoCategorize(item.title),
             store: item.store || 'Mercado Livre',
@@ -1188,6 +1238,34 @@ export default function App() {
                 </p>
               </div>
 
+              {/* WhatsApp Support Section */}
+              <div className="space-y-3 pt-6 border-t border-slate-200">
+                <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-wider flex items-center gap-2">
+                  <HelpCircle size={14} className="text-blue-600" /> WhatsApp não abre no PC?
+                </h4>
+                <p className="text-[10px] text-slate-500 leading-relaxed">
+                  Se o botão de enviar apenas copiar e não abrir o WhatsApp, oriente o cliente a instalar o aplicativo oficial para melhor integração, ou use a versão Web.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <a 
+                    href="https://www.whatsapp.com/download" 
+                    target="_blank" 
+                    rel="noreferrer"
+                    className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all border border-slate-200 shadow-sm"
+                  >
+                    <Download size={14} className="text-blue-600" /> Baixar App
+                  </a>
+                  <a 
+                    href="https://web.whatsapp.com" 
+                    target="_blank" 
+                    rel="noreferrer"
+                    className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all border border-slate-200 shadow-sm"
+                  >
+                    <Globe size={14} className="text-green-600" /> Usar Web
+                  </a>
+                </div>
+              </div>
+
               <button 
                 onClick={() => saveSettings(globalSettings)}
                 className="w-full py-4 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
@@ -1324,116 +1402,95 @@ export default function App() {
             <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black text-yellow-700 uppercase tracking-widest">Automação Ninja</span>
-                <span className="px-2 py-0.5 bg-yellow-400 text-slate-900 rounded text-[9px] font-black uppercase">Novo Script</span>
+                <span className="px-2 py-0.5 bg-yellow-400 text-slate-900 rounded text-[9px] font-black uppercase">V9 Completa</span>
               </div>
               
-              <div className="space-y-2">
-                <p className="text-[11px] text-yellow-800 font-medium leading-tight">
-                  1. Arraste o botão abaixo para sua barra de favoritos:<br/>
-                  2. Em uma página do ML, clique no favorito.<br/>
-                  3. Volte aqui e use o "Importar em Massa".
-                </p>
-                
-                <div 
-                  draggable
-                  onDragStart={(e) => {
-                    const script = `javascript:(function(){
-const items=[];
-let productData=null;
-let interceptedLink=null;
-const originalExec=document.execCommand;
-document.execCommand=function(cmd){if(cmd==='copy'){const activeEl=document.activeElement;const val=activeEl?.value||activeEl?.innerText||'';if(val.includes('mercadolivre.com')||val.includes('meli.la')||val.includes('shopee.com')||val.includes('amazon.com')||val.includes('aliexpress.com')){interceptedLink=val;}}return originalExec.apply(this,arguments)};
-const originalWrite=navigator.clipboard.writeText;
-navigator.clipboard.writeText=function(text){if(text.includes('mercadolivre.com')||text.includes('meli.la')||text.includes('shopee.com')||text.includes('amazon.com')||text.includes('aliexpress.com')){interceptedLink=text;}return originalWrite.apply(this,arguments)};
-
-const getP=(b)=>{
-  if(!b)return null;
-  let f=b.querySelector('.andes-money-amount__fraction, .shopee-price, #priceblock_ourprice, .priceToPay, .product-price-value')?.innerText.replace(/[^0-9,.]/g,'');
-  if(!f){
-    const t=b.innerText.trim();
-    const m=t.match(/(\\d+)[,\\.](\\d{2})/);
-    if(m){f=m[0]}else{f=t.replace(/[^0-9,.]/g,'');}
-  }
-  return f?f.replace('.',','):null;
-};
-
-const getI=(el)=>{
-  const img=el.querySelector('img');
-  if(!img)return'';
-  return img.getAttribute('data-src')||img.getAttribute('src')||img.getAttribute('data-lazy')||img.src||'';
-};
-
-const getStore=()=>{
-  const h=window.location.hostname;
-  if(h.includes('mercadolivre'))return'Mercado Livre';
-  if(h.includes('shopee'))return'Shopee';
-  if(h.includes('amazon'))return'Amazon';
-  if(h.includes('aliexpress'))return'AliExpress';
-  return'Loja Oficial';
-};
-
-const scrapeProduct=()=>{
-  const tEl=document.querySelector('.ui-pdp-title, .shopee-product-info__header__text, #productTitle, .product-title-text');
-  if(tEl){
-    const t=tEl.innerText.trim();
-    const i=getI(document.querySelector('.ui-pdp-gallery, .shopee-product-images, #imgTagWrapperId, .image-view-magnifier-wrap')||document);
-    const pEl=document.querySelector('.ui-pdp-price .andes-money-amount, .shopee-price, .priceToPay, .product-price-value');
-    const p=getP(pEl);
-    const oEl=document.querySelector('.andes-money-amount--previous, .shopee-price-before-discount, .basisPrice, .product-price-del');
-    const o=getP(oEl);
-    let cp='';
-    const cpEl=document.querySelector('.ui-pdp-promotions-pill-label, .shopee-voucher-ticket, .coupon-code');
-    if(cpEl){const m=cpEl.innerText.toUpperCase().match(/[A-Z0-9]{4,}/);if(m)cp=m[0]}
-    if(p)return{title:t,image:i,price:p,originalPrice:o||'',coupon:cp,link:window.location.href.split('?')[0],store:getStore()}
-  }
-  return null;
-};
-
-const finalize=()=>{
-  const details=productData;
-  if(details){details.link=interceptedLink||details.link;items.push(details)}
-  const cards=document.querySelectorAll('.ui-search-result, .shopee-search-item-result__item, .s-result-item, .search-item, .poly-card');
-  cards.forEach(c=>{
-    const tEl=c.querySelector('.ui-search-item__title, .shopee-item-card__name, h2, .product-title');
-    if(!tEl)return;
-    const t=tEl.innerText.trim();
-    const img=getI(c);
-    const pEl=c.querySelector('.andes-money-amount, .shopee-item-card__current-price, .a-price, .price-current');
-    const p=getP(pEl);
-    if(p)items.push({title:t,image:img,price:p,originalPrice:'',coupon:'',link:c.querySelector('a')?.href||'',store:getStore()})
-  });
-  document.execCommand=originalExec;navigator.clipboard.writeText=originalWrite;
-  if(items.length){
-    const unique=Array.from(new Map(items.map(it=>[it.link,it])).values());
-    const json=JSON.stringify(unique);
-    const el=document.createElement('textarea');el.value=json;document.body.appendChild(el);el.select();originalExec.call(document,'copy');document.body.removeChild(el);
-    alert('🚀 '+getStore()+' CAPTURADO! '+unique.length+'\\n\\nAgora basta Colar (Ctrl+V) no app.')
-  }else{alert('❌ Nenhum produto encontrado.')}
-};
-
-productData=scrapeProduct();
-const shareBtn=Array.from(document.querySelectorAll('button, a')).find(b=>b.innerText.includes('Compartilhar')||b.innerText.includes('Ganhar')||b.className?.includes('share'));
-if(shareBtn&&productData){shareBtn.click();setTimeout(finalize,1500)}else{finalize()}
-})();`;
-                    e.dataTransfer.setData('text/plain', script);
-                    e.dataTransfer.setData('text/uri-list', script);
-                  }}
-                  className="w-full bg-slate-900 border-2 border-dashed border-yellow-500/50 py-4 rounded-xl text-[11px] !text-yellow-500 font-bold flex items-center justify-center gap-3 cursor-grab active:cursor-grabbing hover:bg-black transition-all shadow-xl shadow-yellow-500/10 group"
-                >
-                  <div className="w-8 h-8 bg-yellow-500/10 rounded-full flex items-center justify-center group-hover:scale-110 transition-transform">
-                    <MousePointerClick size={16} className="text-yellow-500" />
-                  </div>
-                  <div className="flex flex-col items-start leading-tight">
-                    <span className="text-yellow-500">ARRASTE ESTE BOTÃO PARA</span>
-                    <span className="text-white opacity-60 uppercase">Sua barra de Favoritos</span>
+              <div className="space-y-3">
+                <div className="bg-white/70 p-3 rounded-lg border border-yellow-200/50 space-y-2 group">
+                  <p className="text-[10px] text-yellow-800 font-black flex items-center gap-1.5 underline decoration-yellow-400 decoration-2">
+                    <Info size={12} /> LEIA COM ATENÇÃO:
+                  </p>
+                  <div className="space-y-1.5">
+                    <div className="flex items-start gap-2 text-[10px] text-yellow-700">
+                      <span className="bg-yellow-400 text-slate-900 w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center font-black">1</span>
+                      <p className="leading-tight font-bold">Marque os produtos na <b>Fila</b> (Check no canto).</p>
+                    </div>
+                    <div className="flex items-start gap-2 text-[10px] text-yellow-700 border-l-2 border-yellow-400 pl-2">
+                      <span className="bg-yellow-400 text-slate-900 w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center font-black">2</span>
+                      <p className="leading-tight font-bold"><b>ARRASTE</b> o botão abaixo para sua <b>Barra de Favoritos</b>.</p>
+                    </div>
+                    <div className="flex items-start gap-2 text-[10px] text-yellow-700">
+                      <span className="bg-yellow-400 text-slate-900 w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center font-black">3</span>
+                      <p className="leading-tight font-bold">Abra o <b>WhatsApp Web</b> e entre no grupo.</p>
+                    </div>
+                    <div className="flex items-start gap-2 text-[10px] text-yellow-700 border-l-2 border-yellow-400 pl-2">
+                      <span className="bg-yellow-400 text-slate-900 w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center font-black">4</span>
+                      <p className="leading-tight font-bold">Clique no favorito <b>enquanto estiver no Zap</b>.</p>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="flex-1 overflow-hidden flex flex-col pt-2">
+            {/* Bookmarklets Container */}
+            <div className="space-y-2">
+              {/* Bookmarklet 1: Capture */}
+              <div 
+                draggable
+                    onClick={() => toast.error('NÃO CLIQUE! Você deve ARRASTAR este botão para a Barra de Favoritos do seu Chrome!', { duration: 6000, icon: '⬆️' })}
+                    onDragStart={(e) => {
+                      const script = `javascript:(function(){function clean(s){return(s||'').replace(/\\s+/g,' ').trim()}function parsePrice(s){if(!s)return null;var m=String(s).match(/[\\d\\.]+(?:,\\d{1,2})?/);if(!m)return null;var v=m[0];if(/,\\d{1,2}$/.test(v))v=v.replace(/\\./g,'').replace(',','.');var n=parseFloat(v);return isFinite(n)&&n>0&&n<1e6?n:null}function fmt(n){if(n==null)return null;var s=n.toFixed(2).replace('.',',');return s.replace(/,00$/,'')}function cleanTitle(s){s=clean(s);s=s.replace(/^[☀-➿⌀-⏿■-◿\\s\\-\\|·]+/,'');s=s.replace(/^[\\uD83C-\\uDBFF][\\uDC00-\\uDFFF]\\s*/,'');s=s.replace(/^(MAIS\\s+VENDIDO|GANHOS\\s+EXTRAS|PROMO[ÇC][ÃA]O|OFF|FRETE\\s+GR[ÁA]TIS|NOVO)\\s*[:\\-]?\\s*/i,'');return clean(s)}function isJunk(s){if(!s)return true;if(s.length<10)return true;if(/^(R\\$|\\d+\\s*%|MAIS\\s+VENDIDO|Compartilhar|Frete|GANHOS)/i.test(s))return true;return false}function isProductHref(h){if(!h)return false;if(/meli\\.la\\//i.test(h))return true;if(!/mercadolivre\\.com/i.test(h))return false;if(/\\/(ajuda|hub|login|cadastro|conta|seguranca|menu|busca|policies|terminos|notification)/i.test(h))return false;if(/\\/p\\/MLB\\d+/i.test(h))return true;if(/[?&]client=affiliates/i.test(h))return true;if(/produto\\.mercadolivre/i.test(h))return true;return false}function sleep(ms){return new Promise(function(r){setTimeout(r,ms)})}var MELI_RE=/https?:\\/\\/meli\\.la\\/[A-Za-z0-9]+/;var pendingIdx=-1;var captured={};function trapMeli(text){if(typeof text!=='string')return false;var m=text.match(MELI_RE);if(m&&pendingIdx>=0){captured[pendingIdx]=m[0];return true}return false}var origWT=null;if(navigator.clipboard&&navigator.clipboard.writeText){origWT=navigator.clipboard.writeText.bind(navigator.clipboard);navigator.clipboard.writeText=function(text){trapMeli(text);return origWT(text)}}var origExec=document.execCommand.bind(document);document.execCommand=function(cmd){if(cmd==='copy'||cmd==='cut'){try{var sel=window.getSelection?window.getSelection().toString():'';if(sel)trapMeli(sel);var ae=document.activeElement;if(ae){if(ae.value)trapMeli(ae.value);if(ae.textContent)trapMeli(ae.textContent)}}catch(e){}}return origExec.apply(document,arguments)};document.addEventListener('copy',function(e){try{if(e.clipboardData){var txt=e.clipboardData.getData('text/plain')||e.clipboardData.getData('text');if(txt)trapMeli(txt)}var sel=window.getSelection?window.getSelection().toString():'';if(sel)trapMeli(sel)}catch(err){}},true);function findInDOM(){var sels=['input[value*="meli.la"]','a[href*="meli.la"]','textarea','[data-href*="meli.la"]','[data-url*="meli.la"]','[data-clipboard-text*="meli.la"]'];var els=document.querySelectorAll(sels.join(','));for(var i=0;i<els.length;i++){var attrs=['value','href','data-href','data-url','data-clipboard-text'];for(var a=0;a<attrs.length;a++){var v=els[i].getAttribute?els[i].getAttribute(attrs[a]):null;if(v){var m=v.match(MELI_RE);if(m)return m[0]}}var t=els[i].value||els[i].textContent||'';var m2=t&&t.match(MELI_RE);if(m2)return m2[0]}var html=document.body&&document.body.innerHTML||'';var mm=html.match(MELI_RE);return mm?mm[0]:null}function findCopyLink(){var best=null,bestLen=9999;var all=document.querySelectorAll('*');for(var i=0;i<all.length;i++){var el=all[i];var txt=clean(el.textContent||'');if(!txt||txt.length>30)continue;if(!/^copiar\\s+link$/i.test(txt))continue;var click=el;for(var j=0;j<4&&click;j++){var tag=(click.tagName||'').toLowerCase();if(tag==='button'||tag==='a'||click.getAttribute('role')=== 'button'||click.onclick)break;click=click.parentElement}if(!click)click=el;if(txt.length<bestLen){best=click;bestLen=txt.length}}return best}function humanClick(el){if(!el)return;try{var opts={bubbles:true,cancelable:true,view:window,button:0};el.dispatchEvent(new MouseEvent('mousedown',opts));el.dispatchEvent(new MouseEvent('mouseup',opts));el.dispatchEvent(new MouseEvent('click',opts))}catch(e){try{el.click()}catch(e2){}}}function closeModal(){var sels=['[class*="andes-modal__close"]','button[class*="close"]','[aria-label*="ech" i]','[aria-label*="lose" i]','[class*="close-button"]'];for(var i=0;i<sels.length;i++){var b=document.querySelector(sels[i]);if(b){try{humanClick(b)}catch(e){}return}}document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true}));document.dispatchEvent(new KeyboardEvent('keyup',{key:'Escape',code:'Escape',keyCode:27,which:27,bubbles:true}))}var priceRe=/(?:R\\$|R\\$ )?\\s*[\\d\\.]+(?:,\\d{2})?/g;var imgs=document.querySelectorAll('img');var seenSrc={};var rawCards=[];for(var i=0;i<imgs.length;i++){var img=imgs[i];var w=img.naturalWidth||img.width||0;var h=img.naturalHeight||img.height||0;if(w<100&&h<100)continue;if(seenSrc[img.src])continue;seenSrc[img.src]=1;var card=img.parentElement;var foundCard=null;for(var j=0;j<8&&card;j++){var prods=[];var alls=card.querySelectorAll('a[href]');for(var x=0;x<alls.length;x++)if(isProductHref(alls[x].href))prods.push(alls[x]);var txt=card.innerText||'';var prices=txt.match(priceRe);if(prods.length>=1&&prices&&prices.length){var bigImgs=card.querySelectorAll('img');var bigCount=0;for(var k=0;k<bigImgs.length;k++){var iw=bigImgs[k].naturalWidth||bigImgs[k].width||0;var ih=bigImgs[k].naturalHeight||bigImgs[k].height||0;if(iw>=100||ih>=100)bigCount++}if(bigCount<=1){foundCard={el:card,img:img,prices:prices,links:prods};break}}card=card.parentElement}if(foundCard)rawCards.push(foundCard)}if(!rawCards.length){alert('Nenhum produto encontrado nesta pagina. Va ate uma pagina de produtos no painel ML Afiliados.');return}var products=rawCards.map(function(c){var text=c.el.innerText||'';var title=cleanTitle(c.img.alt||'');if(isJunk(title)){var lines=text.split('\\n').map(clean).filter(Boolean);for(var li=0;li<lines.length;li++){var l=cleanTitle(lines[li]);if(!isJunk(l)&&/[a-zA-ZÀ-ſ]{4,}/.test(l)){title=l;break}}}var pFull=null,pOld=null;var pTag=c.el.querySelector('.andes-money-amount--previous');if(pTag)pOld=parsePrice(pTag.innerText);var mTags=c.el.querySelectorAll('.andes-money-amount');for(var t=0;t<mTags.length;t++){var v=parsePrice(mTags[t].innerText);if(!v)continue;if(mTags[t].classList.contains('andes-money-amount--previous'))pOld=v;else pFull=v}var vals=c.prices.map(parsePrice).filter(Boolean);var uniq=[];for(var v=0;v<vals.length;v++)if(uniq.indexOf(vals[v])<0)uniq.push(vals[v]);if(!pFull&&uniq.length>=1)pFull=Math.min.apply(null,uniq);if(!pOld&&uniq.length>=2)pOld=Math.max.apply(null,uniq);if(pOld&&pFull&&pOld<=pFull*1.01)pOld=null;var discount='';if(pOld&&pFull&&pOld>pFull){var pct=Math.floor((1-pFull/pOld)*100);if(pct>=1)discount=pct+'% OFF'}var meli=c.el.querySelector('a[href*="meli.la"]');var longHref=c.links[0].href;return{_card:c.el,title:title.slice(0,200),price:fmt(pFull),price_from:fmt(pOld),originalPrice:fmt(pOld),discount:discount,image:c.img.src,affiliate_link:meli?meli.href:longHref,_hasMeli:!!meli}});function findShareBtn(cardEl){var cands=cardEl.querySelectorAll('button, a, [role="button"]');for(var i=0;i<cands.length;i++){var t=(cands[i].textContent||'')+' '+(cands[i].getAttribute('aria-label')||'');if(/compartilhar/i.test(t))return cands[i]}return null}function waitMeli(idx,timeoutMs){return new Promise(function(resolve){var start=Date.now();function tick(){if(captured[idx])return resolve(captured[idx]);var dom=findInDOM();if(dom)return resolve(dom);if(Date.now()-start>=timeoutMs)return resolve(null);setTimeout(tick,150)}tick()})}function processOne(idx){if(idx>=products.length)return finalize();var p=products[idx];if(p._hasMeli)return processOne(idx+1);pendingIdx=idx;var btn=findShareBtn(p._card);if(!btn){pendingIdx=-1;return processOne(idx+1)}humanClick(btn);sleep(800).then(function(){var copy=findCopyLink();if(copy)humanClick(copy);return waitMeli(idx,2500)}).then(function(link){if(link)p.affiliate_link=link;closeModal();return sleep(600)}).then(function(){pendingIdx=-1;processOne(idx+1)})}function finalize(){products.forEach(function(p){delete p._card;delete p._hasMeli});var json=JSON.stringify(products);var got=0;for(var i=0;i<products.length;i++)if(/meli\\.la\\//.test(products[i].affiliate_link||''))got++;var msg=products.length+' produto(s) capturado(s) ('+got+' com link meli.la curto)! Volte ao app, cole com Ctrl+V e clique em Importar.';var done=function(){alert(msg)};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(json).then(done,function(){var t=document.createElement('textarea');t.value=json;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();done()})}else{var t=document.createElement('textarea');t.value=json;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();done()}}processOne(0)})();`;
+                      e.dataTransfer.setData('text/plain', script);
+                      e.dataTransfer.setData('text/uri-list', script);
+                    }}
+                    className="w-full bg-slate-900 border border-yellow-500/30 py-3 rounded-xl text-[10px] text-yellow-500 font-bold flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing hover:bg-black transition-all group shadow-lg"
+                  >
+                    <Target size={14} className="text-yellow-500" />
+                    <span>1. CAPTURAR OFERTAS NO MERCADO LIVRE (V11)</span>
+                  </div>
+
+                  {/* Bookmarklet 2: Auto-Sender V6 */}
+                  <div 
+                    draggable
+                    onClick={() => toast.error('⚠️ NÃO CLIQUE! Arraste este botão para sua Barra de Favoritos para usar no Zap!', { duration: 6000, icon: '⬆️' })}
+                    onDragStart={(e) => {
+                      const selectedProducts = products.filter(p => p.selected);
+                      if (selectedProducts.length === 0) {
+                        toast.error('MARQUE OS PRODUTOS NA FILA PRIMEIRO!');
+                        e.preventDefault();
+                        return;
+                      }
+
+                      const queueData = selectedProducts.slice(0, 100).map(p => ({
+                        image: p.image || '',
+                        text: formatText(p)
+                      }));
+
+                      const delay = globalSettings.autoPostInterval || 30;
+
+                      const script = `javascript:(function(){var DATA=${JSON.stringify(queueData)};var DELAY_MS=${delay}*1000;if(!Array.isArray(DATA)||!DATA.length){alert('Fila vazia.');return}if(!/web\\.whatsapp\\.com/.test(location.hostname)){alert('Abra o WhatsApp Web primeiro.');return}var ex=document.getElementById('__ml_bot__');if(ex)ex.remove();var st=false;var b=document.createElement('div');b.id='__ml_bot__';b.style.cssText='position:fixed;top:80px;right:20px;background:#fff;border:3px solid #25d366;padding:20px;z-index:99999;font:14px sans-serif;color:#000;border-radius:16px;box-shadow:0 12px 48px rgba(0,0,0,.4);min-width:320px;';b.innerHTML='<div style="font-weight:900;color:#25d366;margin-bottom:10px;font-size:18px;display:flex;justify-content:space-between;align-items:center;"><span>🚀 Zap Ninja PRO V17</span><span id="__ml_x__" style="cursor:pointer;color:#999;font-size:24px;">&times;</span></div><div id="__ml_st__" style="margin:10px 0;font-size:14px;line-height:1.5;min-height:42px;color:#333;font-weight:500;">Conectando...</div><div style="background:#eee;height:10px;border-radius:5px;overflow:hidden;margin:12px 0;"><div id="__ml_bar__" style="background:#25d366;height:100%;width:0;transition:width 0.4s ease;"></div></div><button id="__ml_st_btn__" style="width:100%;margin-top:10px;padding:12px;background:#dc3545;color:#fff;border:0;border-radius:10px;cursor:pointer;font-weight:800;font-size:13px;text-transform:uppercase;">PARAR TUDO</button>';document.body.appendChild(b);document.getElementById('__ml_st_btn__').onclick=function(){st=true;setSt('⛔ Parado!');setTimeout(()=>b.remove(),1500)};document.getElementById('__ml_x__').onclick=function(){st=true;b.remove()};function setSt(s){var el=document.getElementById('__ml_st__');if(el)el.textContent=s}function setPr(n,t){var el=document.getElementById('__ml_bar__');if(el)el.style.width=(n/t*100)+'%'}function sleep(m){return new Promise(r=>setTimeout(r,m))}function clUI(){var d=document.querySelector('div[role="dialog"]');if(d)document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,bubbles:true}))}function mkF(bl){return new File([bl],'p.jpg',{type:bl.type||'image/jpeg'})}async function ftImg(u,fn){if(!u)return null;fn('🔍 Baixando imagem...');var ps=[u,'https://images.weserv.nl/?url='+encodeURIComponent(u.replace(/^https?:\\/\\//,'')),'https://corsproxy.io/?'+encodeURIComponent(u)];for(var i=0;i<ps.length;i++){if(st)return null;try{var r=await fetch(ps[i],{mode:'cors'});if(r.ok){var bl=await r.blob();if(bl.size>1000)return mkF(bl)}}catch(e){}}return null}function fInp(){return document.querySelector('#main [contenteditable="true"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('[role="textbox"][contenteditable="true"]')}function fCap(){return document.querySelector('div[role="dialog"] [contenteditable="true"]')||document.querySelector('.copyable-area [contenteditable="true"]')}function fSnd(){var i=document.querySelector('span[data-icon="send"]')||document.querySelector('span[data-icon="wds-ic-send-filled"]');return i?i.closest('button')||i.parentElement:null}function psT(el,t){el.focus();var d=new DataTransfer();d.setData('text/plain',t);el.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:d}))}function psI(f){var d=new DataTransfer();d.items.add(f);var e=new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:d});var i=fInp();if(i){i.focus();i.dispatchEvent(e)}document.body.dispatchEvent(e)}function drI(f){var d=new DataTransfer();d.items.add(f);var t=document.querySelector('#main')||document.body;['dragenter','dragover','drop'].forEach(ty=>{t.dispatchEvent(new DragEvent(ty,{bubbles:true,cancelable:true,dataTransfer:d}))})}async function sndT(t){var i=fInp();if(!i)return;psT(i,t);await sleep(1500);var btn=fSnd();if(btn)btn.click();else i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,bubbles:true}))}async function snd(m,idx,tot){var p='['+ (idx+1)+'/'+tot+'] ';for(var k=0;k<3;k++){clUI();await sleep(300)}var img=await ftImg(m.image,s=>setSt(p+s));if(!img){setSt(p+'⚠️ Sem foto, enviando conteúdo...');await sndT(m.text);return}setSt(p+'🖼️ Colando foto...');var attempts=0,cap=null;while(attempts<2&&!cap){var inp=fInp();if(inp)inp.focus();await sleep(500);psI(img);for(var j=0;j<30;j++){if(st)return;await sleep(400);cap=fCap();if(cap)break}attempts++;if(!cap&&attempts<2){setSt(p+'🔄 Re-tentando...');clUI();await sleep(1000)}}if(!cap){setSt(p+'🔄 Tentando arrasto...');drI(img);for(var j=0;j<20;j++){if(st)return;await sleep(400);cap=fCap();if(cap)break}}if(!cap){setSt(p+'❌ Erro no anexo, via texto...');await sndT(m.text);return}setSt(p+'✍️ Colando legenda...');psT(cap,m.text);await sleep(1500);var btn=fSnd();if(btn)btn.click();else cap.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,bubbles:true}));await sleep(2500);clUI();setSt(p+'✅ Enviado!')}async function run(){for(var i=0;i<DATA.length;i++){if(st)return;if(!fInp()){setSt('⚠️ Selecione uma conversa...');while(!fInp()&&!st)await sleep(1000);if(st)return}setPr(i,DATA.length);await snd(DATA[i],i,DATA.length);if(i<DATA.length-1&&!st){var d=Math.floor(DELAY_MS/1000);for(var s=d;s>0;s--){if(st)return;setSt('['+ (i+1)+'/'+DATA.length+'] Aguardando '+s+'s...');await sleep(1000)}}}setPr(DATA.length,DATA.length);setSt('🔥 Concluido!');setTimeout(()=>b.remove(),4000)}run()})()`;
+
+                      e.dataTransfer.setData('text/plain', script);
+                      e.dataTransfer.setData('text/uri-list', script);
+                    }}
+                    className="w-full bg-emerald-600 border border-emerald-400 py-3 rounded-xl text-[10px] text-white font-bold flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-600/20"
+                  >
+                    <Zap size={14} className="text-white fill-emerald-200" />
+                    <span>2. POSTAR NO ZAP (V17)</span>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-hidden flex flex-col pt-2">
               <div className="flex items-center justify-between mb-2">
-                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Fila de Captura ({filteredProducts.length})</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Fila ({filteredProducts.length})</h3>
+                  <button 
+                    onClick={() => toggleAllSelection(products.some(p => !p.selected))}
+                    className="text-[9px] font-black text-blue-500 uppercase hover:underline"
+                  >
+                    {products.some(p => !p.selected) ? 'Marcar Tudo' : 'Desmarcar'}
+                  </button>
+                </div>
                 <div className="relative">
                    <Search size={12} className="absolute left-2 top-2 text-slate-400" />
                    <input 
@@ -1479,10 +1536,30 @@ if(shareBtn&&productData){shareBtn.click();setTimeout(finalize,1500)}else{finali
                         "group flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer relative overflow-hidden",
                         selectedProductId === p.id 
                           ? "bg-white border-blue-200 ring-2 ring-blue-50" 
-                          : "bg-white border-slate-200 hover:border-slate-300"
+                          : "bg-white border-slate-200 hover:border-slate-300",
+                        p.selected && "border-blue-400 bg-blue-50/30"
                       )}
                     >
-                      <div className="w-10 h-10 bg-slate-50 rounded-lg border border-slate-100 flex-shrink-0 overflow-hidden">
+                      <div 
+                        onClick={(e) => { e.stopPropagation(); toggleProductSelection(p.id, !!p.selected); }}
+                        className={cn(
+                          "absolute left-0 top-0 bottom-0 w-1 transition-all",
+                          p.selected ? "bg-blue-500" : "bg-transparent group-hover:bg-slate-200"
+                        )}
+                      />
+
+                      <div className="flex items-center gap-3 flex-1 overflow-hidden">
+                        <div 
+                          onClick={(e) => { e.stopPropagation(); toggleProductSelection(p.id, !!p.selected); }}
+                          className={cn(
+                            "w-4 h-4 rounded border flex items-center justify-center transition-all flex-shrink-0",
+                            p.selected ? "bg-blue-500 border-blue-500" : "bg-white border-slate-300"
+                          )}
+                        >
+                          {p.selected && <Check size={10} className="text-white" />}
+                        </div>
+
+                        <div className="w-10 h-10 bg-white rounded-lg border border-slate-100 flex-shrink-0 overflow-hidden">
                         {p.image ? (
                           <img src={p.image} className="w-full h-full object-contain" alt="" />
                         ) : (
@@ -1504,6 +1581,7 @@ if(shareBtn&&productData){shareBtn.click();setTimeout(finalize,1500)}else{finali
                           <p className={cn("text-[11px] font-bold truncate", selectedProductId === p.id ? "text-blue-600" : "text-slate-800")}>{p.title}</p>
                         </div>
                         <p className="text-[10px] text-slate-500 font-medium">R$ {p.price}</p>
+                      </div>
                       </div>
                       <button 
                         onClick={(e) => { e.stopPropagation(); deleteProduct(p.id); }}
@@ -1873,13 +1951,13 @@ if(shareBtn&&productData){shareBtn.click();setTimeout(finalize,1500)}else{finali
                     {localProduct.originalPrice && (
                       <p className="text-[12px] text-slate-400">
                         {globalSettings.showEmojiPriceOriginal ? globalSettings.emojiPriceOriginal + ' ' : ''}
-                        {getEffectiveLabel(localProduct.labelOriginalPrice, globalSettings.labelOriginalPrice)} <span className="line-through">R$ {localProduct.originalPrice}</span>
+                        {getEffectiveLabel(localProduct.labelOriginalPrice, globalSettings.labelOriginalPrice)} <span className="line-through">{localProduct.originalPrice.startsWith('R$') ? localProduct.originalPrice : `R$ ${localProduct.originalPrice}`}</span>
                       </p>
                     )}
                     <div className="h-2" />
                     <p className="text-[13px]">
                       {globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}
-                      {getEffectiveLabel(localProduct.labelPrice, globalSettings.labelPrice)} <span className="font-bold">R$ {localProduct.price}</span>
+                      {getEffectiveLabel(localProduct.labelPrice, globalSettings.labelPrice)} <span className="font-bold">{localProduct.price.startsWith('R$') ? localProduct.price : `R$ ${localProduct.price}`}</span>
                     </p>
                     {localProduct.coupon && (
                       <p className="text-[13px]">
@@ -1895,19 +1973,23 @@ if(shareBtn&&productData){shareBtn.click();setTimeout(finalize,1500)}else{finali
                         )}>{localProduct.coupon}</span>
                       </p>
                     )}
-                    <div className="h-2" />
-                    <p className={cn(
-                      "text-[13px] underline truncate",
-                      globalSettings.themeColor === 'blue' && "text-blue-600",
-                      globalSettings.themeColor === 'emerald' && "text-emerald-600",
-                      globalSettings.themeColor === 'pink' && "text-pink-600",
-                      globalSettings.themeColor === 'orange' && "text-orange-600",
-                      globalSettings.themeColor === 'indigo' && "text-indigo-600",
-                      globalSettings.themeColor === 'slate' && "text-slate-800"
-                    )}>
-                      {globalSettings.showEmojiGroup ? globalSettings.emojiGroup + ' ' : ''}
-                      {localProduct.link}
-                    </p>
+                    {localProduct.link && (
+                      <>
+                        <div className="h-2" />
+                        <p className={cn(
+                          "text-[13px] underline truncate",
+                          globalSettings.themeColor === 'blue' && "text-blue-600",
+                          globalSettings.themeColor === 'emerald' && "text-emerald-600",
+                          globalSettings.themeColor === 'pink' && "text-pink-600",
+                          globalSettings.themeColor === 'orange' && "text-orange-600",
+                          globalSettings.themeColor === 'indigo' && "text-indigo-600",
+                          globalSettings.themeColor === 'slate' && "text-slate-800"
+                        )}>
+                          {globalSettings.showEmojiGroup ? globalSettings.emojiGroup + ' ' : ''}
+                          {localProduct.link}
+                        </p>
+                      </>
+                    )}
                     <div className="h-3" />
                     <p className="text-[11px] font-black text-slate-400 uppercase tracking-tighter">{getEffectiveLabel(localProduct.labelGroupLink, globalSettings.labelGroupLink)}</p>
                     <p className={cn(
