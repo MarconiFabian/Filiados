@@ -93,22 +93,34 @@ async function startServer() {
              fraction = match[1];
              cents = match[2];
            } else {
-             fraction = fullText.replace(/[^0-9]/g, '');
-             cents = "00";
+             const onlyNums = fullText.replace(/[^0-9]/g, '');
+             if (onlyNums.length > 2) {
+                fraction = onlyNums.slice(0, -2);
+                cents = onlyNums.slice(-2);
+             } else {
+                fraction = onlyNums;
+                cents = "00";
+             }
            }
         }
         
-        const isPrevious = $el.hasClass('andes-money-amount--previous') || $el.closest('.ui-pdp-price__old').length > 0;
+        const isPrevious = $el.hasClass('andes-money-amount--previous') || 
+                          $el.closest('.ui-pdp-price__old').length > 0 ||
+                          $el.closest('.ui-pdp-price__original-value').length > 0;
         
         if (fraction) {
           allPrices.push({ fraction, cents: cents || "00", isPrevious });
         }
       });
 
-      // Price extraction for other stores
+      // Price extraction for other stores or if ML patterns failed
       if (allPrices.length === 0) {
           const genericPriceSelectors = [
+              '.price-tag-fraction', 
               '.shopee-price', 
+              '.ui-pdp-price__main-container .andes-money-amount__fraction',
+              '.price-tag-amount .andes-money-amount__fraction',
+              '.andes-money-amount__fraction',
               '.priceToPay', 
               '.product-price-value',
               '.a-offscreen',
@@ -125,7 +137,8 @@ async function startServer() {
                   } else {
                       const simpleMatch = text.replace(/[^0-9]/g, '');
                       if (simpleMatch) {
-                          price = simpleMatch;
+                          const cents = $(selector).parent().find('.andes-money-amount__cents').first().text().trim() || '00';
+                          price = `${simpleMatch},${cents}`;
                           break;
                       }
                   }
@@ -136,7 +149,12 @@ async function startServer() {
               '.shopee-price-before-discount',
               '.basisPrice',
               '.product-price-del',
-              '.a-text-strike'
+              '.a-text-strike',
+              '.ui-pdp-price__original-value .andes-money-amount__fraction',
+              '.andes-money-amount--previous .andes-money-amount__fraction',
+              'del .andes-money-amount__fraction',
+              'del',
+              '.price-old'
           ];
 
           for (const selector of genericOriginalPriceSelectors) {
@@ -146,6 +164,13 @@ async function startServer() {
                 if (match) {
                     originalPrice = `${match[1]},${match[2]}`;
                     break;
+                } else {
+                    const simpleMatch = text.replace(/[^0-9,.]/g, '').replace('.', ',');
+                    if (simpleMatch && simpleMatch.length > 0) {
+                        originalPrice = simpleMatch;
+                        if (!originalPrice.includes(',')) originalPrice += ',00';
+                        break;
+                    }
                 }
             }
           }
