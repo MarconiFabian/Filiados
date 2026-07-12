@@ -38,14 +38,16 @@ import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { GoogleGenAI } from "@google/genai";
 import { toast, Toaster } from 'react-hot-toast';
 import { auth, db } from './lib/firebase';
+import { buildWhatsAppSenderBookmarklet } from './lib/whatsappBookmarklet';
 import { 
   signInWithPopup, 
   GoogleAuthProvider, 
   signOut, 
   onAuthStateChanged,
+  getRedirectResult,
+  signInWithRedirect,
   User 
 } from 'firebase/auth';
 import { 
@@ -63,8 +65,6 @@ import {
   writeBatch,
   deleteField
 } from 'firebase/firestore';
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -165,6 +165,8 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [isLoginLoading, setIsLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
 
@@ -196,7 +198,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const [globalSettings, setGlobalSettings] = useState({
+  const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
     groupLink: 'https://divulgador.app/sua-bio',
     defaultCoupon: '',
     affiliateId: '',
@@ -216,6 +218,7 @@ export default function App() {
     showEmojiGroup: true,
     cardStyle: 'modern',
     themeColor: 'blue', // default
+    autoPostInterval: 30,
   });
 
   // Local state for smooth editing
@@ -226,14 +229,16 @@ export default function App() {
 
   // PWA & Service Worker Registration
   useEffect(() => {
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
+    const registerServiceWorker = () => {
+      if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('/sw.js').then(
           (registration) => console.log('SW registered:', registration.scope),
           (err) => console.log('SW register failed:', err)
         );
-      });
-    }
+      }
+    };
+
+    window.addEventListener('load', registerServiceWorker);
 
     const handleBeforeInstall = (e: any) => {
       e.preventDefault();
@@ -242,7 +247,10 @@ export default function App() {
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
 
-    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+    return () => {
+      window.removeEventListener('load', registerServiceWorker);
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+    };
   }, []);
 
   const handleInstallClick = async () => {
@@ -294,15 +302,20 @@ export default function App() {
 
   // Auth State
   useEffect(() => {
-    import('firebase/auth').then(({ getRedirectResult }) => {
-      getRedirectResult(auth).then((result) => {
+    getRedirectResult(auth).then((result) => {
         if (result) {
           console.log("Login via redirect bem sucedido:", result.user.email);
+          setLoginError('');
           toast.success("Login realizado!");
         }
       }).catch(err => {
         console.error("Erro redirect:", err);
-      });
+        const currentDomain = window.location.hostname;
+        if (err?.code === 'auth/unauthorized-domain') {
+          setLoginError(`O domínio ${currentDomain} ainda não está autorizado no Firebase.`);
+        } else {
+          setLoginError(`Não foi possível concluir o login: ${err?.code || err?.message || 'erro desconhecido'}.`);
+        }
     });
 
     return onAuthStateChanged(auth, (u) => {
@@ -393,43 +406,36 @@ export default function App() {
     };
   }, [user]);
 
-  const handleLogin = (useRedirect = false) => {
+  const handleLogin = async (useRedirect = true) => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
+    setLoginError('');
+    setIsLoginLoading(true);
 
-    if (useRedirect) {
-      import('firebase/auth').then(({ signInWithRedirect }) => {
-        signInWithRedirect(auth, provider);
-      });
-      return;
-    }
+    try {
+      if (useRedirect) {
+        await signInWithRedirect(auth, provider);
+        return;
+      }
 
-    signInWithPopup(auth, provider)
-      .then((result) => {
+      const result = await signInWithPopup(auth, provider);
         console.log("Login bem sucedido:", result.user.email);
         toast.success("Login realizado com sucesso!");
-      })
-      .catch((err: any) => {
-        console.error("Erro detalhado do Firebase:", err);
-        
-        if (err.code === 'auth/popup-closed-by-user') {
-          return;
-        }
+    } catch (err: any) {
+      console.error("Erro detalhado do Firebase:", err);
+      const currentDomain = window.location.hostname;
 
-        if (err.code === 'auth/popup-blocked') {
-          alert("🚨 POP-UP BLOQUEADO!\n\n1. O navegador bloqueou a janela.\n2. Tente usar o botão 'Entrar (Alternativo)' abaixo ou permita pop-ups nas configurações do navegador.");
-          return;
-        }
-        
-        if (err.message?.includes('unauthorized-domain') || err.code === 'auth/unauthorized-domain') {
-          const currentDomain = window.location.hostname;
-          alert("🚨 DOMÍNIO NÃO AUTORIZADO: Você precisa adicionar '" + currentDomain + "' no Firebase.\n\n1. Vá no Firebase Console\n2. Authentication > Settings > Authorized Domains\n3. Clique em 'Add domain' e cole: " + currentDomain);
-        } else {
-          alert("Erro ao entrar: " + (err.code || err.message));
-        }
-        
-        toast.error("Erro ao fazer login.");
-      });
+      if (err?.code === 'auth/popup-closed-by-user') return;
+      if (err?.code === 'auth/popup-blocked') {
+        setLoginError('O navegador bloqueou a janela. Use o botão principal, que entra por redirecionamento.');
+      } else if (err?.code === 'auth/unauthorized-domain') {
+        setLoginError(`O domínio ${currentDomain} ainda não está autorizado no Firebase.`);
+      } else {
+        setLoginError(`Não foi possível entrar: ${err?.code || err?.message || 'erro desconhecido'}.`);
+      }
+    } finally {
+      setIsLoginLoading(false);
+    }
   };
 
   const handleLogout = () => {
@@ -584,10 +590,26 @@ export default function App() {
   };
 
   const fetchProduct = async (url: string) => {
+    const normalizedUrl = url.trim();
+    if (!user) {
+      toast.error('Entre na sua conta para adicionar produtos.');
+      return;
+    }
+    if (!normalizedUrl) {
+      toast.error('Cole um link do Mercado Livre.');
+      return;
+    }
+    try {
+      const parsedUrl = new URL(normalizedUrl);
+      if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error();
+    } catch {
+      toast.error('O link informado não é válido.');
+      return;
+    }
+
     setIsLoading(true);
     try {
-      console.log("Fetching product from:", url);
-      const res = await fetch(`/api/scrape?url=${encodeURIComponent(url)}`);
+      const res = await fetch(`/api/scrape?url=${encodeURIComponent(normalizedUrl)}`);
       
       if (!res.ok) {
         const errorText = await res.text();
@@ -596,12 +618,10 @@ export default function App() {
       }
 
       const data = await res.json();
-      console.log("Product data received:", data);
-      
       if (data.error) throw new Error(data.error);
 
       const newProductData = {
-        userId: user!.uid,
+        userId: user.uid,
         title: data.title || 'Produto sem título',
         image: data.image || '',
         price: data.price || '0,00',
@@ -618,10 +638,10 @@ export default function App() {
       const productsPath = `users/${user.uid}/products`;
       await addDoc(collection(db, productsPath), newProductData);
       setInputUrl('');
+      toast.success('Produto adicionado à fila.');
     } catch (err: any) {
-      if (err instanceof Error && err.message.startsWith('{')) throw err; // Already handled
       console.error("Erro completo:", err);
-      handleFirestoreError(err, OperationType.CREATE, `users/${user?.uid}/products`);
+      toast.error(err instanceof Error ? err.message : 'Não foi possível capturar o produto.');
     } finally {
       setIsLoading(false);
     }
@@ -889,24 +909,20 @@ export default function App() {
     
     setIsAiLoading(true);
     try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Você é um copywriter especialista em vendas no WhatsApp e redes sociais. 
-        Reescreva o título do produto abaixo para ser muito atraente, persuasivo e use uma "chamada" vendedora no início.
-        Exemplos de tom: "Olha que conjunto maravilhoso!", "Preço imbatível nesse...", "Vem garantir o seu...", "Aproveite essa oferta de...".
-        Mantenha as palavras-chave principais para que o cliente saiba o que é.
-        Retorne APENAS o novo título, de forma curta e direta, sem aspas ou explicações.
-        
-        Título original: ${selectedProduct.title}`,
+      const response = await fetch('/api/improve-title', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: selectedProduct.title }),
       });
-
-      const newTitle = response.text?.trim();
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Serviço de IA indisponível.');
+      const newTitle = typeof data.title === 'string' ? data.title.trim() : '';
       if (newTitle) {
         handleLocalUpdate({ title: newTitle });
       }
     } catch (err) {
       console.error('Erro ao melhorar título com IA:', err);
-      alert('Não foi possível melhorar o título com IA no momento.');
+      toast.error(err instanceof Error ? err.message : 'Não foi possível melhorar o título com IA.');
     } finally {
       setIsAiLoading(false);
     }
@@ -997,18 +1013,30 @@ export default function App() {
             <h1 className="text-3xl font-black text-slate-900 tracking-tight leading-tight">ML Afiliados Pro</h1>
             <p className="text-slate-500 font-medium mt-2">Plataforma Ninja para Consultores de Ofertas Mercado Livre.</p>
           </div>
+          {loginError && (
+            <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-left text-sm font-bold text-red-700">
+              <p>{loginError}</p>
+              {loginError.includes('não está autorizado') && (
+                <p className="mt-2 text-xs font-medium text-red-600">Firebase Console → Authentication → Settings → Authorized domains → adicione ml-afiliados-pro.vercel.app</p>
+              )}
+            </div>
+          )}
+
           <button 
-            onClick={() => handleLogin(false)}
-            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl shadow-slate-200"
+            onClick={() => handleLogin(true)}
+            disabled={isLoginLoading}
+            className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl shadow-slate-200 disabled:cursor-wait disabled:opacity-60"
           >
-            <LogIn size={24} /> Entrar com Google
+            {isLoginLoading ? <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/30 border-t-white" /> : <LogIn size={24} />}
+            {isLoginLoading ? 'Abrindo Google...' : 'Entrar com Google'}
           </button>
           
           <button 
-            onClick={() => handleLogin(true)}
+            onClick={() => handleLogin(false)}
+            disabled={isLoginLoading}
             className="w-full py-3 bg-white text-slate-500 border border-slate-200 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
           >
-             Não abriu? Use o Modo Alternativo
+             Tentar abrir em uma nova janela
           </button>
           <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
              <div className="text-left">
@@ -1412,16 +1440,16 @@ export default function App() {
               </button>
             </div>
 
-            <div className="bg-[#FFFBEB] p-5 rounded-2xl border border-amber-200 shadow-sm mb-4">
+            <div className="bg-[#FFFBEB] p-4 rounded-2xl border border-amber-200 shadow-sm mb-2">
               <div className="flex items-center justify-between mb-4">
-                <span className="text-[11px] font-black text-amber-900 uppercase tracking-wider">AUTOMAÇÃO NINJA</span>
-                <span className="px-3 py-1 bg-[#FBBF24] text-slate-900 rounded-lg text-[9px] font-black uppercase shadow-sm">V9 COMPLETA</span>
+                <span className="text-[11px] font-black text-amber-900 uppercase tracking-wider">Central de automação</span>
+                <span className="px-3 py-1 bg-white text-amber-800 border border-amber-200 rounded-lg text-[9px] font-black uppercase shadow-sm">2 etapas</span>
               </div>
               
               <div className="bg-white rounded-xl border border-amber-100 p-4 space-y-4">
                 <div className="flex items-center gap-2 text-amber-900 mb-1">
                   <Info size={14} className="text-amber-600" />
-                  <span className="text-[10px] font-black uppercase border-b-2 border-amber-400 leading-none">LEIA COM ATENÇÃO:</span>
+                  <span className="text-[10px] font-black uppercase border-b-2 border-amber-400 leading-none">Como utilizar</span>
                 </div>
 
                 <div className="space-y-3">
@@ -1439,22 +1467,30 @@ export default function App() {
                   <div className="flex items-center gap-3 relative">
                     <div className="absolute left-3 -top-3 w-[2px] h-3 bg-amber-200"></div>
                     <div className="w-6 h-6 bg-[#FBBF24] text-slate-900 rounded-full flex-shrink-0 flex items-center justify-center font-black text-[11px] shadow-sm">3</div>
-                    <p className="text-[10px] font-bold text-amber-900 uppercase tracking-tight"><b>ARRASTE</b> o botão <span className="bg-emerald-600 text-white px-1.5 py-0.5 rounded text-[8px]">2. ENVIAR</span> para seus <b>Favoritos</b>.</p>
+                    <p className="text-[10px] font-bold text-amber-900 uppercase tracking-tight">Instale a extensão <b>ML Afiliados Sender</b> no Chrome.</p>
                   </div>
 
                   <div className="flex items-center gap-3 relative">
                     <div className="absolute left-3 -top-3 w-[2px] h-3 bg-amber-200"></div>
                     <div className="w-6 h-6 bg-[#FBBF24] text-slate-900 rounded-full flex-shrink-0 flex items-center justify-center font-black text-[11px] shadow-sm">4</div>
-                    <p className="text-[10px] font-bold text-amber-900">Abra o <b>Zap Web</b> e clique no favorito para postar.</p>
+                    <p className="text-[10px] font-bold text-amber-900">Clique em <b>ENVIAR PARA EXTENSÃO</b>, escolha o grupo e confirme no painel do WhatsApp.</p>
                   </div>
                 </div>
               </div>
             </div>
 
             {/* Bookmarklets Container */}
-            <div className="space-y-2">
+            <div className="space-y-2" aria-label="Instalação das automações">
+              <div className={cn(
+                "flex items-center justify-between rounded-lg border px-3 py-2 text-[10px] font-bold",
+                selectedCount > 0 ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-white text-slate-500"
+              )}>
+                <span>{selectedCount > 0 ? 'Fila pronta para envio' : 'Selecione produtos na fila'}</span>
+                <span className="rounded-full bg-white px-2 py-0.5 tabular-nums shadow-sm">{selectedCount} selecionado{selectedCount === 1 ? '' : 's'}</span>
+              </div>
               {/* Bookmarklet 1: Capture */}
-              <div 
+              <button
+                type="button"
                 draggable
                     onClick={() => toast.error('NÃO CLIQUE! Você deve ARRASTAR este botão para a Barra de Favoritos do seu Chrome!', { duration: 6000, icon: '⬆️' })}
                     onDragStart={(e) => {
@@ -1463,16 +1499,45 @@ export default function App() {
                       e.dataTransfer.setData('text/uri-list', scraperScript);
                       e.dataTransfer.setData('text/html', `<a href="${scraperScript}">1. CAPTURAR (V11)</a>`);
                     }}
-                    className="w-full bg-slate-900 border border-yellow-500/30 py-3 rounded-xl text-[10px] text-yellow-500 font-bold flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing hover:bg-black transition-all group shadow-lg"
+                    aria-label="Arraste para os favoritos: capturar ofertas do Mercado Livre"
+                    className="w-full bg-slate-900 border border-yellow-500/30 px-3 py-3 rounded-xl text-[10px] text-yellow-500 font-bold flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing hover:bg-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 transition-all group shadow-lg"
                   >
                     <Target size={14} className="text-yellow-500" />
                     <span>1. CAPTURAR OFERTAS NO MERCADO LIVRE (V11)</span>
-                  </div>
+                  </button>
 
                   {/* Bookmarklet 2: Auto-Sender V6 */}
-                  <div 
-                    draggable
-                    onClick={() => toast.error('⚠️ NÃO CLIQUE! Arraste este botão para sua Barra de Favoritos para usar no Zap!', { duration: 6000, icon: '⬆️' })}
+                  <button
+                    type="button"
+                    draggable={false}
+                    onClick={() => {
+                      const selectedItems = products.filter(p => !!p.selected);
+                      if (selectedItems.length === 0) {
+                        toast.error('MARQUE OS PRODUTOS NA FILA PRIMEIRO!');
+                        return;
+                      }
+                      const requestId = `ml-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                      const timeout = window.setTimeout(() => {
+                        window.removeEventListener('message', onExtensionAck);
+                        toast.error('Extensão não encontrada. Instale ou ative a ML Afiliados Sender.');
+                      }, 2500);
+                      function onExtensionAck(event: MessageEvent) {
+                        const message = event.data;
+                        if (event.source !== window || message?.source !== 'ml-afiliados-extension' || message?.type !== 'ML_EXTENSION_ACK' || message?.requestId !== requestId) return;
+                        window.clearTimeout(timeout);
+                        window.removeEventListener('message', onExtensionAck);
+                        if (message.ok) toast.success(`${message.count} oferta(s) enviadas para a extensão. Escolha o grupo no WhatsApp.`);
+                        else toast.error(message.error || 'A extensão recusou a fila.');
+                      }
+                      window.addEventListener('message', onExtensionAck);
+                      window.postMessage({
+                        source: 'ml-afiliados-pro',
+                        type: 'ML_QUEUE_TO_EXTENSION',
+                        requestId,
+                        delaySeconds: globalSettings.autoPostInterval || 30,
+                        items: selectedItems.map(p => ({ image: p.image || '', text: formatText(p) }))
+                      }, window.location.origin);
+                    }}
                     onDragStart={(e) => {
                       const selectedItems = products.filter(p => !!p.selected);
                       if (selectedItems.length === 0) {
@@ -1487,19 +1552,24 @@ export default function App() {
                       }));
 
                       const delay = globalSettings.autoPostInterval || 30;
-                      const scriptName = "2. ENVIAR (V21)";
+                      const scriptName = "2. ENVIAR (V22)";
 
                       const script = `javascript:(function(){var DATA=${JSON.stringify(queueData)};var DELAY_MS=${delay}*1000;if(!Array.isArray(DATA)||!DATA.length){alert('Fila vazia.');return}if(!/web\\.whatsapp\\.com/.test(location.hostname)){alert('Abra o WhatsApp Web primeiro.');return}var ex=document.getElementById('__ml_bot__');if(ex)ex.remove();var st=false;var b=document.createElement('div');b.id='__ml_bot__';b.style.cssText='position:fixed;top:80px;right:20px;background:#fff;border:3px solid #25d366;padding:20px;z-index:99999;font:14px sans-serif;color:#000;border-radius:16px;box-shadow:0 12px 48px rgba(0,0,0,.4);min-width:320px;';b.innerHTML='<div style="font-weight:900;color:#25d366;margin-bottom:10px;font-size:18px;display:flex;justify-content:space-between;align-items:center;"><span>🚀 Zap Ninja PRO V21</span><span id="__ml_x__" style="cursor:pointer;color:#999;font-size:24px;">&times;</span></div><div id="__ml_st__" style="margin:10px 0;font-size:14px;line-height:1.5;min-height:42px;color:#333;font-weight:500;">Conectando...</div><div style="background:#eee;height:10px;border-radius:5px;overflow:hidden;margin:12px 0;"><div id="__ml_bar__" style="background:#25d366;height:100%;width:0;transition:width 0.4s ease;"></div></div><button id="__ml_st_btn__" style="width:100%;margin-top:10px;padding:12px;background:#dc3545;color:#fff;border:0;border-radius:10px;cursor:pointer;font-weight:800;font-size:13px;text-transform:uppercase;">PARAR TUDO</button>';document.body.appendChild(b);document.getElementById('__ml_st_btn__').onclick=function(){st=true;setSt('⛔ Parado!');setTimeout(()=>b.remove(),1500)};document.getElementById('__ml_x__').onclick=function(){st=true;b.remove()};function setSt(s){var el=document.getElementById('__ml_st__');if(el)el.textContent=s}function setPr(n,t){var el=document.getElementById('__ml_bar__');if(el)el.style.width=(n/t*100)+'%'}function sleep(m){return new Promise(r=>setTimeout(r,m))}function clUI(){var xbtns=document.querySelectorAll('button[aria-label="Fechar"], button[aria-label="Close"], [data-icon="x"], [data-icon="close"], [data-icon="wds-ic-close"]');xbtns.forEach(x=>{try{x.click()}catch(e){}});var d=document.querySelector('div[role="dialog"]');if(d){document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,bubbles:true}))}var ovls=document.querySelectorAll('.overlay, [class*="overlay"]');ovls.forEach(o=>{if(o.children.length===0||o.classList.contains('overlay'))o.remove()});var bts=document.querySelectorAll('button');bts.forEach(b=>{if(b.innerText==='OK'||b.innerText==='ENTENDI')b.click()})}function mkF(bl){return new File([bl],'p.jpg',{type:bl.type||'image/jpeg'})}async function ftImg(u,fn){if(!u)return null;fn('🔍 Baixando imagem...');var ps=[u,'https://images.weserv.nl/?url='+encodeURIComponent(u.replace(/^https?:\\/\\//,'')),'https://corsproxy.io/?'+encodeURIComponent(u)];for(var i=0;i<ps.length;i++){if(st)return null;try{var r=await fetch(ps[i],{mode:'cors'});if(r.ok){var bl=await r.blob();if(bl.size>1000)return mkF(bl)}}catch(e){}}return null}function fInp(){var m=document.querySelector('#main');if(m)return m.querySelector('[contenteditable="true"]');return document.querySelector('footer [contenteditable="true"]')||document.querySelector('[role="textbox"][contenteditable="true"]')}function fCap(){return document.querySelector('div[role="dialog"] [contenteditable="true"]')||document.querySelector('.copyable-area [contenteditable="true"]')||document.querySelector('div[role="presentation"] [contenteditable="true"]')||document.querySelector('#main [contenteditable="true"][data-tab="10"]')}function fSnd(){var i=document.querySelector('span[data-icon="send"]')||document.querySelector('span[data-icon="wds-ic-send-filled"]');return i?i.closest('button')||i.parentElement:null}function psT(el,t){el.focus();var d=new DataTransfer();d.setData('text/plain',t);el.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:d}))}function psI(f){var d=new DataTransfer();d.items.add(f);var e=new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:d});var i=fInp();if(i){i.click();i.focus();i.dispatchEvent(e)}document.body.dispatchEvent(e)}function drI(f){var d=new DataTransfer();d.items.add(f);var t=document.querySelector('#main')||document.body;['dragenter','dragover','drop'].forEach(ty=>{t.dispatchEvent(new DragEvent(ty,{bubbles:true,cancelable:true,dataTransfer:d}))})}async function sndT(t){var i=fInp();if(!i)return;psT(i,t);await sleep(1500);var btn=fSnd();if(btn)btn.click();else i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,bubbles:true}))}async function snd(m,idx,tot){var p='['+ (idx+1)+'/'+tot+'] ';for(var k=0;k<3;k++){clUI();await sleep(1000)}var img=await ftImg(m.image,s=>setSt(p+s));if(!img){setSt(p+'⚠️ Foto falhou, enviando texto...');await sndT(m.text);return}setSt(p+'🖼️ Preparando foto...');var attempts=0,cap=null;while(attempts<4&&!cap){var inp=fInp();if(inp){inp.click();await sleep(200);inp.focus();}await sleep(1500);psI(img);for(var j=0;j<70;j++){if(st)return;await sleep(300);cap=fCap();if(cap)break}attempts++;if(!cap&&attempts<4){setSt(p+'🔄 Re-tentando ('+attempts+')...');clUI();await sleep(2500)}}if(!cap){setSt(p+'🔄 Tentando arrasto...');drI(img);for(var j=0;j<50;j++){if(st)return;await sleep(500);cap=fCap();if(cap)break}}if(!cap){setSt(p+'❌ Erro anexo, via texto...');await sndT(m.text);return}setSt(p+'✍️ Legendando...');cap.focus();psT(cap,m.text);await sleep(2500);var btn=fSnd();if(btn)btn.click();else cap.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,bubbles:true}));await sleep(6000);clUI();setSt(p+'✅ Enviado!')}async function run(){for(var i=0;i<DATA.length;i++){if(st)return;if(!fInp()){setSt('⚠️ Selecione a conversa...');while(!fInp()&&!st)await sleep(1000);if(st)return}setPr(i,DATA.length);await snd(DATA[i],i,DATA.length);if(i<DATA.length-1&&!st){var d=Math.floor(DELAY_MS/1000);for(var s=d;s>0;s--){if(st)return;setSt('['+ (i+1)+'/'+DATA.length+'] Aguardando '+s+'s...');await sleep(1000)}}}setPr(DATA.length,DATA.length);setSt('🔥 Concluido!');setTimeout(()=>b.remove(),4000)}run()})()`;
 
-                      e.dataTransfer.setData('text/plain', script);
-                      e.dataTransfer.setData('text/uri-list', script);
-                      e.dataTransfer.setData('text/html', `<a href="${script}">${scriptName}</a>`);
+                      const improvedScript = buildWhatsAppSenderBookmarklet(queueData, delay);
+                      e.dataTransfer.setData('text/plain', improvedScript);
+                      e.dataTransfer.setData('text/uri-list', improvedScript);
+                      e.dataTransfer.setData('text/html', `<a href="${improvedScript}">${scriptName}</a>`);
                     }}
-                    className="w-full bg-emerald-600 border border-emerald-400 py-3 rounded-xl text-[10px] text-white font-bold flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-600/20"
+                    aria-label={`Arraste para os favoritos: enviar ${selectedCount} produtos pelo WhatsApp Web`}
+                    className={cn(
+                      "w-full border px-3 py-3 rounded-xl text-[10px] text-white font-bold flex items-center justify-center gap-2 cursor-grab active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 transition-all shadow-lg",
+                      selectedCount > 0 ? "bg-emerald-600 border-emerald-400 hover:bg-emerald-700 shadow-emerald-600/20" : "bg-slate-400 border-slate-300 shadow-none"
+                    )}
                   >
                     <Zap size={14} className="text-white fill-emerald-200" />
-                    <span>2. ENVIAR SELECIONADOS (V21)</span>
-                  </div>
+                    <span>2. ENVIAR {selectedCount > 0 ? `${selectedCount} SELECIONADO${selectedCount === 1 ? '' : 'S'}` : 'SELECIONADOS'} PARA EXTENSÃO</span>
+                  </button>
                 </div>
 
                 <div className="flex-1 overflow-hidden flex flex-col pt-2">
@@ -2093,4 +2163,3 @@ export default function App() {
     </div>
   );
 }
-

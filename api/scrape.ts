@@ -1,19 +1,18 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { parseMarketplaceUrl } from '../lib/security.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { url } = req.query;
-  if (!url || typeof url !== "string") {
-    return res.status(400).json({ error: "URL is required" });
-  }
-
   try {
-    const response = await axios.get(url, {
+    const safeUrl = parseMarketplaceUrl(req.query.url);
+    const response = await axios.get(safeUrl.toString(), {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
       },
-      timeout: 10000
+      timeout: 10000,
+      maxContentLength: 2_000_000,
+      maxRedirects: 3,
     });
     const $ = cheerio.load(response.data);
     
@@ -100,10 +99,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       price,
       originalPrice,
       coupon,
-      originalLink: url
+      store: 'Mercado Livre',
+      originalLink: safeUrl.toString()
     });
   } catch (error) {
     console.error("Scraping error:", error);
-    return res.status(500).json({ error: "Failed to scrape product data" });
+    const message = error instanceof Error ? error.message : 'Falha ao capturar o produto.';
+    const status = /link|HTTPS|Mercado Livre/i.test(message) ? 400 : 502;
+    return res.status(status).json({ error: message });
   }
 }

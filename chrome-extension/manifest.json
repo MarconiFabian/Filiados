@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "ML Afiliados Sender",
+  "version": "1.0.0",
+  "description": "Recebe a fila do ML Afiliados Pro e envia imagens com legendas no WhatsApp Web.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://ml-afiliados-pro.vercel.app/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://web.whatsapp.com/*",
+    "https://http2.mlstatic.com/*",
+    "https://*.mlstatic.com/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "ML Afiliados Sender",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://ml-afiliados-pro.vercel.app/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["whatsapp.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

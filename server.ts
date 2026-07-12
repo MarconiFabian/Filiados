@@ -3,52 +3,92 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import axios from "axios";
 import * as cheerio from "cheerio";
+import { GoogleGenAI } from "@google/genai";
+import { parseImageUrl, parseMarketplaceUrl } from "./lib/security.js";
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
   app.use(express.json());
+  app.options('/api/proxy-image', (req, res) => {
+    const origin = req.headers.origin;
+    if (origin === 'https://web.whatsapp.com' || origin === 'https://ml-afiliados-pro.vercel.app') {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.status(204).end();
+  });
   
   // API route to proxy images for clipboard
   app.get("/api/proxy-image", async (req, res) => {
-    const imageUrl = req.query.url as string;
-    if (!imageUrl) return res.status(400).send("URL is required");
-
+    const origin = req.headers.origin;
+    if (origin === 'https://web.whatsapp.com' || origin === 'https://ml-afiliados-pro.vercel.app') {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     try {
-      let finalUrl = imageUrl;
-      if (finalUrl.startsWith('//')) {
-        finalUrl = 'https:' + finalUrl;
-      }
-
-      const response = await axios.get(finalUrl, { 
+      const imageUrl = parseImageUrl(req.query.url);
+      const response = await axios.get(imageUrl.toString(), {
         responseType: 'arraybuffer',
+        timeout: 10_000,
+        maxContentLength: 10_000_000,
+        maxRedirects: 2,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
       });
       const contentType = response.headers['content-type'] as string || 'image/png';
+      if (!contentType.toLowerCase().startsWith('image/')) {
+        return res.status(415).send('O endereço não retornou uma imagem.');
+      }
       res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
       res.send(response.data);
     } catch (error) {
-      console.error("Proxy error for URL:", imageUrl, error);
-      res.status(500).send("Failed to proxy image");
+      console.error("Proxy image error:", error);
+      res.status(400).send(error instanceof Error ? error.message : 'Falha ao carregar imagem.');
+    }
+  });
+
+  app.post("/api/improve-title", async (req, res) => {
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    if (!title || title.length > 500) {
+      return res.status(400).json({ error: 'Informe um título válido.' });
+    }
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(503).json({ error: 'Configure GEMINI_API_KEY para usar a IA.' });
+    }
+
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: `Reescreva o título abaixo como uma chamada curta e atraente para uma oferta. Preserve o nome e as características principais do produto. Não invente preço, desconto, cupom ou benefício. Retorne somente o novo título, sem aspas.\n\nTítulo: ${title}`,
+      });
+      const improvedTitle = response.text?.trim();
+      if (!improvedTitle) throw new Error('Resposta vazia');
+      return res.json({ title: improvedTitle.slice(0, 500) });
+    } catch (error) {
+      console.error('Improve title error:', error);
+      return res.status(502).json({ error: 'Não foi possível melhorar o título agora.' });
     }
   });
 
   // API Route for scraping
   app.get("/api/scrape", async (req, res) => {
-    const { url } = req.query;
-    if (!url || typeof url !== "string") {
-      return res.status(400).json({ error: "URL is required" });
-    }
-
     try {
-      const response = await axios.get(url, {
+      const safeUrl = parseMarketplaceUrl(req.query.url);
+      const response = await axios.get(safeUrl.toString(), {
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         },
-        timeout: 10000
+        timeout: 10000,
+        maxContentLength: 2_000_000,
+        maxRedirects: 3,
       });
       const $ = cheerio.load(response.data);
       
@@ -68,10 +108,7 @@ async function startServer() {
       
       // Attempt to find store name
       let store = "Loja Oficial";
-      if (url.includes('mercadolivre.com') || url.includes('meli.la')) store = "Mercado Livre";
-      else if (url.includes('shopee.com')) store = "Shopee";
-      else if (url.includes('amazon.com')) store = "Amazon";
-      else if (url.includes('aliexpress.com')) store = "AliExpress";
+      store = "Mercado Livre";
 
       // Attempt to find price in standard ML patterns
       let price = "";
@@ -237,11 +274,13 @@ async function startServer() {
         originalPrice,
         coupon,
         store,
-        originalLink: url
+        originalLink: safeUrl.toString()
       });
     } catch (error) {
       console.error("Scraping error:", error);
-      res.status(500).json({ error: "Failed to scrape product data" });
+      const message = error instanceof Error ? error.message : 'Falha ao capturar o produto.';
+      const status = /link|HTTPS|Mercado Livre/i.test(message) ? 400 : 502;
+      res.status(status).json({ error: message });
     }
   });
 
