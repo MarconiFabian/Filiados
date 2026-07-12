@@ -63,7 +63,17 @@
     const transfer = new DataTransfer();
     transfer.setData('text/plain', text);
     element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
-    if (!(element.innerText || '').trim()) document.execCommand('insertText', false, text);
+  }
+
+  async function sendText(text) {
+    const input = composer();
+    if (!input) throw new Error('Campo de mensagem não encontrado.');
+    pasteText(input, text);
+    await sleep(900);
+    const button = sendButton(document);
+    if (button) button.click();
+    else input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+    await sleep(1800);
   }
 
   async function downloadImage(url) {
@@ -99,16 +109,46 @@
     return null;
   }
 
-  async function attachAndSend(item) {
-    const file = await downloadImage(item.image);
+  function pasteImage(file) {
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    const target = composer() || document.body;
+    target.focus?.();
+    target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
+    document.body.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
+  }
+
+  function dropImage(file) {
+    const transfer = new DataTransfer();
+    transfer.items.add(file);
+    const target = document.querySelector('#main') || composer() || document.body;
+    for (const type of ['dragenter', 'dragover', 'drop']) {
+      target.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    }
+  }
+
+  async function openImagePreview(file) {
+    pasteImage(file);
+    let preview = await waitForPreview();
+    if (preview) return preview;
+
+    dropImage(file);
+    preview = await waitForPreview();
+    if (preview) return preview;
+
     const input = await findImageInput();
-    if (!input) throw new Error('Botão de anexar imagem não encontrado.');
+    if (!input) return null;
     const transfer = new DataTransfer();
     transfer.items.add(file);
     Object.defineProperty(input, 'files', { configurable: true, value: transfer.files });
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
-    const preview = await waitForPreview();
+    return waitForPreview();
+  }
+
+  async function attachAndSend(item) {
+    const file = await downloadImage(item.image);
+    const preview = await openImagePreview(file);
     if (!preview) throw new Error('A prévia da imagem não abriu.');
     if (preview.caption) pasteText(preview.caption, item.text);
     await sleep(900);
@@ -141,9 +181,18 @@
         setProgress(index + 1, queue.length);
         setStatus(`${label} Enviado com foto.`);
       } catch (error) {
-        setStatus(`${label} NÃO ENVIADO: ${error?.message || error}`, true);
-        stopped = true;
-        break;
+        const imageError = error?.message || String(error);
+        try {
+          setStatus(`${label} Foto falhou; enviando anúncio completo em texto...`, true);
+          await sendText(queue[index].text);
+          await chrome.storage.local.set({ mlQueueIndex: index + 1, mlLastError: `Foto não enviada: ${imageError}` });
+          setProgress(index + 1, queue.length);
+          setStatus(`${label} Enviado em texto. Foto não enviada: ${imageError}`, true);
+        } catch (textError) {
+          setStatus(`${label} NÃO ENVIADO: foto: ${imageError}; texto: ${textError?.message || textError}`, true);
+          stopped = true;
+          break;
+        }
       }
       if (index < queue.length - 1) {
         for (let left = delay; left > 0 && !stopped; left--) {
