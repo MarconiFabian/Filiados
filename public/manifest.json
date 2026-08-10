@@ -1,11 +1,12 @@
 {
-  "name": "Gerador de Ofertas Pro",
-  "short_name": "Ofertas Pro",
-  "description": "Gerador de ofertas profissionais para afiliados",
+  "name": "ML Afiliados Pro",
+  "short_name": "ML Afiliados",
+  "description": "Crie, organize e publique anúncios profissionais de afiliados.",
+  "lang": "pt-BR",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#2563eb",
+  "background_color": "#f1f5f9",
+  "theme_color": "#0f172a",
   "icons": [
     {
       "src": "https://cdn-icons-png.flaticon.com/512/3081/3081840.png",

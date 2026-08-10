@@ -1,17 +1,6 @@
-const MARKETPLACE_HOSTS = [
-  'mercadolivre.com.br',
-  'mercadolivre.com',
-  'meli.la',
-];
+import { MARKETPLACES, detectMarketplaceByHostname, isHostAllowed } from './marketplaces.js';
 
-const IMAGE_HOSTS = [
-  'mlstatic.com',
-];
-
-function isHostAllowed(hostname: string, allowedHosts: string[]) {
-  const normalized = hostname.toLowerCase().replace(/\.$/, '');
-  return allowedHosts.some(host => normalized === host || normalized.endsWith(`.${host}`));
-}
+const IMAGE_HOSTS = MARKETPLACES.flatMap((marketplace) => [...marketplace.imageHosts]);
 
 export function parseMarketplaceUrl(value: unknown): URL {
   if (typeof value !== 'string' || value.length > 2_000) {
@@ -19,11 +8,11 @@ export function parseMarketplaceUrl(value: unknown): URL {
   }
 
   const url = new URL(value);
-  if (url.protocol !== 'https:' || url.username || url.password) {
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) {
     throw new Error('Use um link HTTPS válido.');
   }
-  if (!isHostAllowed(url.hostname, MARKETPLACE_HOSTS)) {
-    throw new Error('No momento, somente links do Mercado Livre são aceitos.');
+  if (!detectMarketplaceByHostname(url.hostname)) {
+    throw new Error('Use um link do Mercado Livre, Amazon, AliExpress ou Shopee.');
   }
   return url;
 }
@@ -33,8 +22,8 @@ export function parseImageUrl(value: unknown): URL {
     throw new Error('Endereço de imagem inválido.');
   }
 
-  const url = new URL(value.startsWith('//') ? `https:${value}` : value);
-  if (url.protocol !== 'https:' || url.username || url.password) {
+  const url = new URL(String(value).startsWith('//') ? `https:${value}` : String(value));
+  if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443')) {
     throw new Error('Use uma imagem HTTPS válida.');
   }
   if (!isHostAllowed(url.hostname, IMAGE_HOSTS)) {

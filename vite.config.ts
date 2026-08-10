@@ -8,22 +8,24 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     build: {
+      chunkSizeWarningLimit: 600,
       rollupOptions: {
         output: {
-          manualChunks: {
-            firebase: ['firebase/app', 'firebase/auth', 'firebase/firestore'],
-            ui: ['motion/react', 'lucide-react', 'react-hot-toast'],
+          manualChunks(moduleId) {
+            if (moduleId.includes('/firebase/') || moduleId.includes('node_modules\\firebase')) return 'firebase';
+            if (['motion', 'lucide-react', 'react-hot-toast'].some((name) => moduleId.includes(`node_modules/${name}`) || moduleId.includes(`node_modules\\${name}`))) return 'ui';
+            return undefined;
           },
         },
       },
     },
     server: {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
+      // File watching can be disabled to prevent flickering during automated edits.
       hmr: process.env.DISABLE_HMR !== 'true',
     },
   };
