@@ -266,11 +266,53 @@ function extractShopee($: CheerioRoot, html: string): ProductData {
   return result;
 }
 
-function extractProduct(marketplace: MarketplaceDefinition, $: CheerioRoot, html: string): ProductData {
+export function extractProduct(marketplace: MarketplaceDefinition, $: CheerioRoot, html: string): ProductData {
   if (marketplace.id === 'mercado-livre') return extractMercadoLivre($);
   if (marketplace.id === 'amazon') return extractAmazon($);
   if (marketplace.id === 'aliexpress') return extractAliExpress($);
   return extractShopee($, html);
+}
+
+const BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
+const SHOPEE_PREVIEW_USER_AGENT = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
+
+export function shopeeProductIds(url: URL): { shopId: string; itemId: string } | null {
+  const pathname = decodeURIComponent(url.pathname);
+  const routeMatch = pathname.match(/\/(?:product|opaanlp)\/(\d+)\/(\d+)(?:\/|$)/i);
+  const slugMatch = pathname.match(/(?:^|[-/])i\.(\d+)\.(\d+)(?:\/|$)/i);
+  const shopId = routeMatch?.[1] || slugMatch?.[1] || url.searchParams.get('shop_id') || url.searchParams.get('shopid') || '';
+  const itemId = routeMatch?.[2] || slugMatch?.[2] || url.searchParams.get('item_id') || url.searchParams.get('itemid') || '';
+  return /^\d+$/.test(shopId) && /^\d+$/.test(itemId) ? { shopId, itemId } : null;
+}
+
+export async function fetchMarketplaceHtml(url: URL, marketplace: MarketplaceDefinition, userAgent: string) {
+  const response = await axios.get<string>(url.toString(), {
+    headers: {
+      'User-Agent': userAgent,
+      'Accept-Language': 'pt-BR,pt;q=0.9',
+    },
+    timeout: 12_000,
+    maxContentLength: 3_000_000,
+    maxRedirects: 4,
+    beforeRedirect: (options) => {
+      const redirected = parseMarketplaceUrl(typeof options.href === 'string'
+        ? options.href
+        : redirectUrl(options as unknown as Record<string, unknown>).toString());
+      if (detectMarketplaceByHostname(redirected.hostname)?.id !== marketplace.id) {
+        throw new Error('O redirecionamento saiu do marketplace original.');
+      }
+    },
+  });
+
+  const finalUrl = response.request?.res?.responseUrl;
+  if (finalUrl) {
+    const redirected = parseMarketplaceUrl(finalUrl);
+    if (detectMarketplaceByHostname(redirected.hostname)?.id !== marketplace.id) {
+      throw new Error('O redirecionamento saiu do marketplace original.');
+    }
+  }
+  if (typeof response.data !== 'string') throw new Error('Resposta inválida de ' + marketplace.name + '.');
+  return response;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -288,39 +330,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const marketplace = detectMarketplaceByHostname(safeUrl.hostname);
     if (!marketplace) throw new Error('Marketplace não reconhecido.');
 
-    const response = await axios.get<string>(safeUrl.toString(), {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36',
-        'Accept-Language': 'pt-BR,pt;q=0.9',
-      },
-      timeout: 12_000,
-      maxContentLength: 3_000_000,
-      maxRedirects: 4,
-      beforeRedirect: (options) => {
-        const redirected = parseMarketplaceUrl(redirectUrl(options as unknown as Record<string, unknown>).toString());
-        if (detectMarketplaceByHostname(redirected.hostname)?.id !== marketplace.id) {
-          throw new Error('O redirecionamento saiu do marketplace original.');
-        }
-      },
-    });
+    let response = await fetchMarketplaceHtml(safeUrl, marketplace, BROWSER_USER_AGENT);
 
-    const finalUrl = response.request?.res?.responseUrl;
-    if (finalUrl) {
-      const redirected = parseMarketplaceUrl(finalUrl);
-      if (detectMarketplaceByHostname(redirected.hostname)?.id !== marketplace.id) {
-        throw new Error('O redirecionamento saiu do marketplace original.');
-      }
+    if (marketplace.id === 'shopee') {
+      const resolvedUrl = new URL(response.request?.res?.responseUrl || safeUrl.toString());
+      const ids = shopeeProductIds(resolvedUrl);
+      if (!ids) throw new Error('Não foi possível identificar o produto nesse link da Shopee.');
+
+      const canonicalUrl = new URL(`https://shopee.com.br/product/${ids.shopId}/${ids.itemId}`);
+      response = await fetchMarketplaceHtml(canonicalUrl, marketplace, SHOPEE_PREVIEW_USER_AGENT);
+      console.info('shopee_product_resolved', {
+        requestId: context.requestId,
+        userId,
+        shopId: ids.shopId,
+        itemId: ids.itemId,
+      });
     }
-    if (typeof response.data !== 'string') throw new Error('Resposta inválida de ' + marketplace.name + '.');
 
     const $ = cheerio.load(response.data);
     const product = extractProduct(marketplace, $, response.data);
     const title = product.title.replace(/\s+/g, ' ').trim();
-    const image = parseImageUrl(product.image).toString();
+    const rawImage = product.image.trim();
 
-    if (title.length < 8 || product.currentValue === null || !image) {
-      throw new Error('Produto incompleto: use o link direto de uma página ativa do produto.');
+    if (title.length < 8 || !rawImage) {
+      throw new Error('Produto incompleto: a loja não forneceu título ou imagem para captura automática.');
     }
+    const requiresManualPrice = marketplace.id === 'shopee' && product.currentValue === null;
+    if (product.currentValue === null && !requiresManualPrice) {
+      throw new Error('Produto incompleto: a loja não forneceu o preço para captura automática.');
+    }
+    const image = parseImageUrl(rawImage).toString();
 
     console.info('scrape_completed', {
       requestId: context.requestId,
@@ -331,8 +370,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json({
       title,
       image,
-      price: formatPrice(product.currentValue),
+      price: product.currentValue === null ? '' : formatPrice(product.currentValue),
       originalPrice: product.originalValue === null ? '' : formatPrice(product.originalValue),
+      requiresManualPrice,
       coupon: product.coupon,
       store: product.store || marketplace.name,
       marketplace: marketplace.id,

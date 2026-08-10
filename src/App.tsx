@@ -684,19 +684,25 @@ export default function App() {
       const title = typeof data.title === 'string' ? data.title.trim() : '';
       const image = typeof data.image === 'string' ? data.image.trim() : '';
       const priceValue = parseCurrencyValue(data.price);
-      if (title.length < 8 || !image || priceValue === null || priceValue <= 0) {
-        throw new Error(`${marketplace.name} não forneceu título, foto e preço válidos. Tente outro link do produto.`);
+      const requiresManualPrice = data.requiresManualPrice === true;
+      if (title.length < 8 || !image) {
+        throw new Error(`${marketplace.name} não forneceu título e foto válidos. Tente outro link do produto.`);
+      }
+      if (!requiresManualPrice && (priceValue === null || priceValue <= 0)) {
+        throw new Error(`${marketplace.name} não forneceu um preço válido. Tente outro link do produto.`);
       }
 
       const originalValue = parseCurrencyValue(data.originalPrice);
-      const originalPrice = originalValue !== null && originalValue > priceValue
+      const originalPrice = priceValue !== null && originalValue !== null && originalValue > priceValue
         ? originalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         : '';
       const newProductData = {
         userId: user.uid,
         title,
         image,
-        price: priceValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        price: priceValue !== null && priceValue > 0
+          ? priceValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+          : '',
         originalPrice,
         coupon: typeof data.coupon === 'string' && data.coupon.trim() ? data.coupon.trim() : globalSettings.defaultCoupon,
         link: typeof data.originalLink === 'string' ? data.originalLink : normalizedUrl,
@@ -706,12 +712,18 @@ export default function App() {
         marketplace: marketplace.id,
         addedAt: Date.now(),
         isHighlight: false,
+        selected: false,
       };
 
-      await addDoc(collection(db, `users/${user.uid}/products`), newProductData);
+      const createdProduct = await addDoc(collection(db, `users/${user.uid}/products`), newProductData);
       if (!options.silent) {
         setInputUrl('');
-        toast.success(`${marketplace.name}: produto adicionado à fila.`);
+        if (requiresManualPrice) {
+          setSelectedProductId(createdProduct.id);
+          toast.success(`${marketplace.name}: título e foto adicionados. Informe o preço no editor antes de enviar.`);
+        } else {
+          toast.success(`${marketplace.name}: produto adicionado à fila.`);
+        }
       }
       return true;
     } catch (error) {
@@ -1735,6 +1747,14 @@ export default function App() {
                         toast.error('MARQUE OS PRODUTOS NA FILA PRIMEIRO!');
                         return;
                       }
+                      const incompleteProducts = selectedItems.filter((product) => {
+                        const price = parseCurrencyValue(product.price);
+                        return price === null || price <= 0;
+                      });
+                      if (incompleteProducts.length > 0) {
+                        toast.error(`Preencha o preço de ${incompleteProducts.length} produto(s) antes de enviar.`);
+                        return;
+                      }
                       const requestId = `ml-${Date.now()}-${Math.random().toString(36).slice(2)}`;
                       const timeout = window.setTimeout(() => {
                         window.removeEventListener('message', onExtensionAck);
@@ -1761,6 +1781,15 @@ export default function App() {
                       const selectedItems = products.filter(p => !!p.selected);
                       if (selectedItems.length === 0) {
                         toast.error('MARQUE OS PRODUTOS NA FILA PRIMEIRO!');
+                        e.preventDefault();
+                        return;
+                      }
+                      const incompleteProducts = selectedItems.filter((product) => {
+                        const price = parseCurrencyValue(product.price);
+                        return price === null || price <= 0;
+                      });
+                      if (incompleteProducts.length > 0) {
+                        toast.error(`Preencha o preço de ${incompleteProducts.length} produto(s) antes de enviar.`);
                         e.preventDefault();
                         return;
                       }
@@ -1915,7 +1944,9 @@ export default function App() {
                           )}
                           <p className={cn("text-[11px] font-bold truncate", selectedProductId === p.id ? "text-blue-600" : "text-slate-800")}>{p.title}</p>
                         </div>
-                        <p className="text-[10px] text-slate-500 font-medium">R$ {p.price}</p>
+                        <p className={cn("text-[10px] font-medium", parseCurrencyValue(p.price) ? "text-slate-500" : "text-amber-700")}>
+                          {parseCurrencyValue(p.price) ? `R$ ${p.price}` : 'Preço pendente'}
+                        </p>
                       </div>
                       </div>
                       <button 
@@ -2314,7 +2345,7 @@ export default function App() {
                     <div className="h-2" />
                     <p className="text-[13px]">
                       {globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}
-                      {getEffectiveLabel(localProduct.labelPrice, globalSettings.labelPrice)} <span className="font-bold">{localProduct.price.startsWith('R$') ? localProduct.price : `R$ ${localProduct.price}`}</span>
+                      {getEffectiveLabel(localProduct.labelPrice, globalSettings.labelPrice)} <span className="font-bold">{parseCurrencyValue(localProduct.price) ? (localProduct.price.startsWith('R$') ? localProduct.price : `R$ ${localProduct.price}`) : 'Informe o preço'}</span>
                     </p>
                     {localProduct.coupon && (
                       <p className="text-[13px]">
