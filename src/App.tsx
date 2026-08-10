@@ -1650,11 +1650,11 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-black uppercase tracking-wider text-emerald-900">Extensão ML Afiliados Sender</p>
-                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.5 para Google Chrome</p>
+                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.6 para Google Chrome</p>
                 </div>
                 <a
-                  href="/ml-afiliados-sender-v1.0.5.zip"
-                  download="ml-afiliados-sender-v1.0.5.zip"
+                  href="/ml-afiliados-sender-v1.0.6.zip"
+                  download="ml-afiliados-sender-v1.0.6.zip"
                   className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase text-white shadow-sm transition hover:bg-emerald-700"
                 >
                   <Download size={14} /> Baixar extensão
@@ -1672,7 +1672,7 @@ export default function App() {
                   <li>Ative o <b>Modo do desenvolvedor</b> no canto superior direito.</li>
                   <li>Clique em <b>Carregar sem compactação</b>.</li>
                   <li>Selecione a pasta extraída que contém o arquivo <b>manifest.json</b>.</li>
-                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.5</b> e deixe a extensão ativada.</li>
+                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.6</b> e deixe a extensão ativada.</li>
                   <li>Fixe a extensão no ícone de quebra-cabeça do Chrome e abra o WhatsApp Web.</li>
                 </ol>
                 <p className="mt-3 rounded-lg bg-amber-50 p-2 text-[9px] font-bold text-amber-800">
