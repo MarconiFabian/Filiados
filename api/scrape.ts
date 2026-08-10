@@ -285,6 +285,118 @@ export function shopeeProductIds(url: URL): { shopId: string; itemId: string } |
   return /^\d+$/.test(shopId) && /^\d+$/.test(itemId) ? { shopId, itemId } : null;
 }
 
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function shopeeApiPrice(value: unknown): number | null {
+  if (typeof value === 'string' && /[.,]/.test(value)) return parsePrice(value);
+  const raw = Number(value);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+
+  // A API da Shopee representa valores monetários inteiros multiplicados por 100.000.
+  const normalized = Number.isInteger(raw) && raw >= 100_000 ? raw / 100_000 : raw;
+  return Number.isFinite(normalized) && normalized > 0 ? normalized : null;
+}
+
+function firstShopeeApiPrice(values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = shopeeApiPrice(value);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
+function shopeeApiImage(value: unknown): string {
+  const image = stringValue(value);
+  if (!image) return '';
+  if (/^https?:\/\//i.test(image)) return image;
+  return 'https://down-br.img.susercontent.com/file/' + image.replace(/^\/+/, '');
+}
+
+export function extractShopeeApiProduct(payload: unknown): ProductData | null {
+  const root = objectValue(payload);
+  const data = objectValue(root.data);
+  const nestedItem = objectValue(data.item);
+  const item = Object.keys(nestedItem).length > 0 ? nestedItem : data;
+  if (Object.keys(item).length === 0) return null;
+
+  const models = Array.isArray(item.models)
+    ? item.models.map(objectValue)
+    : [];
+  const currentValue = firstShopeeApiPrice([
+    item.price_min,
+    item.price,
+    ...models.map((model) => model.price),
+    item.price_max,
+  ]);
+  const originalValue = firstShopeeApiPrice([
+    item.price_min_before_discount,
+    item.price_before_discount,
+    ...models.map((model) => model.price_before_discount),
+    item.price_max_before_discount,
+  ]);
+  const shop = objectValue(item.shop);
+  const title = stringValue(item.name);
+  const image = shopeeApiImage(item.image) || shopeeApiImage(item.images);
+
+  return {
+    title,
+    image,
+    currentValue,
+    originalValue: originalValue !== null && currentValue !== null && originalValue > currentValue
+      ? originalValue
+      : null,
+    coupon: '',
+    store: stringValue(shop.name) || stringValue(item.shop_name) || 'Shopee',
+  };
+}
+
+export async function fetchShopeeApiProduct(ids: { shopId: string; itemId: string }): Promise<ProductData | null> {
+  const canonicalUrl = 'https://shopee.com.br/product/' + ids.shopId + '/' + ids.itemId;
+  const encodedShopId = encodeURIComponent(ids.shopId);
+  const encodedItemId = encodeURIComponent(ids.itemId);
+  const endpoints = [
+    'https://shopee.com.br/api/v4/pdp/get_pc?item_id=' + encodedItemId + '&shop_id=' + encodedShopId,
+    'https://shopee.com.br/api/v4/item/get?itemid=' + encodedItemId + '&shopid=' + encodedShopId,
+  ];
+
+  const attempts = await Promise.allSettled(endpoints.map((endpoint) => axios.get<unknown>(endpoint, {
+    headers: {
+      'User-Agent': BROWSER_USER_AGENT,
+      Accept: 'application/json, text/plain, */*',
+      'Accept-Language': 'pt-BR,pt;q=0.9',
+      Referer: canonicalUrl,
+      Origin: 'https://shopee.com.br',
+      'x-api-source': 'pc',
+      'x-requested-with': 'XMLHttpRequest',
+    },
+    timeout: 8_000,
+    maxRedirects: 1,
+  })));
+
+  for (const attempt of attempts) {
+    if (attempt.status !== 'fulfilled') continue;
+    const product = extractShopeeApiProduct(attempt.value.data);
+    if (product?.currentValue !== null) return product;
+  }
+  return null;
+}
+
+function mergeShopeeProduct(fallback: ProductData, apiProduct: ProductData | null): ProductData {
+  if (!apiProduct) return fallback;
+  return {
+    title: apiProduct.title || fallback.title,
+    image: apiProduct.image || fallback.image,
+    currentValue: apiProduct.currentValue ?? fallback.currentValue,
+    originalValue: apiProduct.originalValue ?? fallback.originalValue,
+    coupon: fallback.coupon || apiProduct.coupon,
+    store: apiProduct.store || fallback.store,
+  };
+}
+
 export async function fetchMarketplaceHtml(url: URL, marketplace: MarketplaceDefinition, userAgent: string) {
   const response = await axios.get<string>(url.toString(), {
     headers: {
@@ -331,6 +443,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!marketplace) throw new Error('Marketplace não reconhecido.');
 
     let response = await fetchMarketplaceHtml(safeUrl, marketplace, BROWSER_USER_AGENT);
+    let shopeeApiProduct: ProductData | null = null;
 
     if (marketplace.id === 'shopee') {
       const resolvedUrl = new URL(response.request?.res?.responseUrl || safeUrl.toString());
@@ -338,17 +451,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!ids) throw new Error('Não foi possível identificar o produto nesse link da Shopee.');
 
       const canonicalUrl = new URL(`https://shopee.com.br/product/${ids.shopId}/${ids.itemId}`);
+      shopeeApiProduct = await fetchShopeeApiProduct(ids);
       response = await fetchMarketplaceHtml(canonicalUrl, marketplace, SHOPEE_PREVIEW_USER_AGENT);
       console.info('shopee_product_resolved', {
         requestId: context.requestId,
         userId,
         shopId: ids.shopId,
         itemId: ids.itemId,
+        hasAutomaticPrice: shopeeApiProduct?.currentValue !== null && shopeeApiProduct !== null,
       });
     }
 
     const $ = cheerio.load(response.data);
-    const product = extractProduct(marketplace, $, response.data);
+    const extractedProduct = extractProduct(marketplace, $, response.data);
+    const product = marketplace.id === 'shopee'
+      ? mergeShopeeProduct(extractedProduct, shopeeApiProduct)
+      : extractedProduct;
     const title = product.title.replace(/\s+/g, ' ').trim();
     const rawImage = product.image.trim();
 
