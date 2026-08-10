@@ -41,6 +41,14 @@ import { twMerge } from 'tailwind-merge';
 import { toast, Toaster } from 'react-hot-toast';
 import { auth, db } from './lib/firebase';
 import { buildWhatsAppSenderBookmarklet } from './lib/whatsappBookmarklet';
+import {
+  MARKETPLACES,
+  detectMarketplaceUrl,
+  getMarketplace,
+  isAffiliateLink,
+  marketplaceFromStore,
+  type MarketplaceId,
+} from '../lib/marketplaces';
 import { 
   signInWithPopup, 
   GoogleAuthProvider, 
@@ -70,6 +78,25 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+function parseCurrencyValue(value: string | number): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) && value >= 0 ? value : null;
+  let normalized = String(value ?? '').replace(/R\$\s*/gi, '').replace(/\s+/g, '').trim();
+  if (!normalized) return null;
+  if (normalized.includes(',')) {
+    normalized = normalized.replace(/\./g, '').replace(',', '.');
+  } else if (/^\d{1,3}(\.\d{3})+$/.test(normalized)) {
+    normalized = normalized.replace(/\./g, '');
+  }
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function formatCurrency(value: string | number): string {
+  const parsed = parseCurrencyValue(value);
+  if (parsed === null) return '';
+  return `R$ ${parsed.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 interface Product {
   id: string;
   title: string;
@@ -81,6 +108,7 @@ interface Product {
   groupLink: string;
   category: string;
   store?: string;
+  marketplace?: MarketplaceId;
   addedAt: number;
   labelOriginalPrice?: string;
   labelPrice?: string;
@@ -88,6 +116,14 @@ interface Product {
   labelGroupLink?: string;
   isHighlight?: boolean;
   selected?: boolean;
+}
+
+function resolveProductMarketplace(product: Pick<Product, 'marketplace' | 'link' | 'store'>) {
+  return getMarketplace(
+    product.marketplace
+      || detectMarketplaceUrl(product.link)?.id
+      || marketplaceFromStore(product.store).id
+  );
 }
 
 interface GlobalSettings {
@@ -197,6 +233,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [activeWorkspace, setActiveWorkspace] = useState<'products' | 'editor' | 'preview'>('products');
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const [globalSettings, setGlobalSettings] = useState<GlobalSettings>({
     groupLink: 'https://divulgador.app/sua-bio',
@@ -265,30 +302,22 @@ export default function App() {
 
   const applyPercentageDiscount = () => {
     if (!localProduct || !discountPercent) return;
-    
-    // Parse current price
-    const currentPriceStr = localProduct.price.replace(',', '.');
-    const currentPrice = parseFloat(currentPriceStr);
-    
-    if (isNaN(currentPrice)) {
-      toast.error("Preço atual inválido para calcular desconto");
+
+    const currentPrice = parseCurrencyValue(localProduct.price);
+    const percentage = Number(discountPercent.replace(',', '.'));
+    if (currentPrice === null) {
+      toast.error('Preço atual inválido para calcular desconto.');
       return;
     }
-    
-    const percentage = parseFloat(discountPercent.replace(',', '.'));
-    if (isNaN(percentage)) {
-      toast.error("Porcentagem de desconto inválida");
+    if (!Number.isFinite(percentage) || percentage <= 0 || percentage >= 100) {
+      toast.error('Informe um desconto entre 0 e 100%.');
       return;
     }
-    
-    // Save current price before applying
+
     setPriceBeforeDiscount(localProduct.price);
-    
-    const discountAmount = currentPrice * (percentage / 100);
-    const newPrice = (currentPrice - discountAmount).toFixed(2);
-    
-    handleLocalUpdate({ price: newPrice.replace('.', ',') });
-    setDiscountPercent(''); // Clear after applying
+    const newPrice = currentPrice * (1 - percentage / 100);
+    handleLocalUpdate({ price: newPrice.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) });
+    setDiscountPercent('');
     toast.success(`Desconto de ${percentage}% aplicado!`);
   };
 
@@ -328,6 +357,9 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setProducts([]);
+      setSelectedProductId(null);
+      setLocalProduct(null);
+      setPriceBeforeDiscount(null);
       return;
     }
 
@@ -438,9 +470,25 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    signOut(auth);
-    toast.success("Sessão encerrada.");
+  const clearUserWorkspace = () => {
+    setProducts([]);
+    setSelectedProductId(null);
+    setLocalProduct(null);
+    setPriceBeforeDiscount(null);
+    setShareStep(1);
+    setBulkInput('');
+    setActiveWorkspace('products');
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      clearUserWorkspace();
+      toast.success('Sessão encerrada.');
+    } catch (error) {
+      console.error('Erro ao encerrar sessão:', error);
+      toast.error('Não foi possível sair agora.');
+    }
   };
 
   const saveSettings = async (updates: any) => {
@@ -491,6 +539,15 @@ export default function App() {
   const lastCelebrateState = useRef<boolean>(false);
   const migrationDone = useRef(false);
 
+  useEffect(() => {
+    migrationDone.current = false;
+    setSelectedProductId(null);
+    setLocalProduct(null);
+    setPriceBeforeDiscount(null);
+    setShareStep(1);
+    setActiveWorkspace('products');
+  }, [user?.uid]);
+
   // Migration: Clear local labels if they match common defaults to allow global settings to work
   useEffect(() => {
     if (!products.length || !user || migrationDone.current) return;
@@ -539,10 +596,13 @@ export default function App() {
     }
     
     // Reset localProduct only if a DIFFERENT product is selected
+    if (!selectedProduct) {
+      setLocalProduct(null);
+      setSelectedProductId(null);
+      return;
+    }
     if (!localProduct || localProduct.id !== selectedProductId) {
-      if (selectedProduct) {
-        setLocalProduct({ ...selectedProduct });
-      }
+      setLocalProduct({ ...selectedProduct });
     }
   }, [selectedProductId, selectedProduct]);
 
@@ -589,64 +649,79 @@ export default function App() {
     return 'Geral';
   };
 
-  const fetchProduct = async (url: string) => {
+  const getApiAuthHeaders = async (includeJson = false): Promise<Record<string, string>> => {
+    if (!user) throw new Error('Sua sessão expirou. Entre novamente.');
+    const token = await user.getIdToken();
+    return {
+      Authorization: `Bearer ${token}`,
+      ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
+    };
+  };
+
+  const fetchProduct = async (url: string, options: { silent?: boolean } = {}): Promise<boolean> => {
     const normalizedUrl = url.trim();
     if (!user) {
-      toast.error('Entre na sua conta para adicionar produtos.');
-      return;
+      if (!options.silent) toast.error('Entre na sua conta para adicionar produtos.');
+      return false;
     }
     if (!normalizedUrl) {
-      toast.error('Cole um link do Mercado Livre.');
-      return;
+      if (!options.silent) toast.error('Cole um link de produto.');
+      return false;
     }
-    try {
-      const parsedUrl = new URL(normalizedUrl);
-      if (!['http:', 'https:'].includes(parsedUrl.protocol)) throw new Error();
-    } catch {
-      toast.error('O link informado não é válido.');
-      return;
+    const marketplace = detectMarketplaceUrl(normalizedUrl);
+    if (!marketplace) {
+      if (!options.silent) toast.error('Use um link HTTPS válido do Mercado Livre, Amazon, AliExpress ou Shopee.');
+      return false;
     }
 
-    setIsLoading(true);
+    if (!options.silent) setIsLoading(true);
     try {
-      const res = await fetch(`/api/scrape?url=${encodeURIComponent(normalizedUrl)}`);
-      
-      if (!res.ok) {
-        const errorText = await res.text();
-        console.error("Server responded with error:", res.status, errorText);
-        throw new Error(`Erro no servidor: ${res.status}`);
+      const headers = await getApiAuthHeaders();
+      const res = await fetch(`/api/scrape?url=${encodeURIComponent(normalizedUrl)}`, { headers });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Não foi possível capturar o produto (${res.status}).`);
+
+      const title = typeof data.title === 'string' ? data.title.trim() : '';
+      const image = typeof data.image === 'string' ? data.image.trim() : '';
+      const priceValue = parseCurrencyValue(data.price);
+      if (title.length < 8 || !image || priceValue === null || priceValue <= 0) {
+        throw new Error(`${marketplace.name} não forneceu título, foto e preço válidos. Tente outro link do produto.`);
       }
 
-      const data = await res.json();
-      if (data.error) throw new Error(data.error);
-
+      const originalValue = parseCurrencyValue(data.originalPrice);
+      const originalPrice = originalValue !== null && originalValue > priceValue
+        ? originalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : '';
       const newProductData = {
         userId: user.uid,
-        title: data.title || 'Produto sem título',
-        image: data.image || '',
-        price: data.price || '0,00',
-        originalPrice: data.originalPrice || '',
-        coupon: data.coupon || globalSettings.defaultCoupon,
-        link: data.originalLink,
+        title,
+        image,
+        price: priceValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+        originalPrice,
+        coupon: typeof data.coupon === 'string' && data.coupon.trim() ? data.coupon.trim() : globalSettings.defaultCoupon,
+        link: typeof data.originalLink === 'string' ? data.originalLink : normalizedUrl,
         groupLink: globalSettings.groupLink,
-        category: autoCategorize(data.title),
-        store: data.store || 'Mercado Livre',
+        category: autoCategorize(title),
+        store: typeof data.store === 'string' && data.store.trim() ? data.store.trim() : marketplace.name,
+        marketplace: marketplace.id,
         addedAt: Date.now(),
         isHighlight: false,
       };
 
-      const productsPath = `users/${user.uid}/products`;
-      await addDoc(collection(db, productsPath), newProductData);
-      setInputUrl('');
-      toast.success('Produto adicionado à fila.');
-    } catch (err: any) {
-      console.error("Erro completo:", err);
-      toast.error(err instanceof Error ? err.message : 'Não foi possível capturar o produto.');
+      await addDoc(collection(db, `users/${user.uid}/products`), newProductData);
+      if (!options.silent) {
+        setInputUrl('');
+        toast.success(`${marketplace.name}: produto adicionado à fila.`);
+      }
+      return true;
+    } catch (error) {
+      console.error('Erro ao capturar produto:', error);
+      if (!options.silent) toast.error(error instanceof Error ? error.message : 'Não foi possível capturar o produto.');
+      return false;
     } finally {
-      setIsLoading(false);
+      if (!options.silent) setIsLoading(false);
     }
   };
-
   const updateProduct = async (id: string, updates: Partial<Product>) => {
     if (!user) return;
     const path = `users/${user.uid}/products/${id}`;
@@ -681,8 +756,9 @@ export default function App() {
 
   const openAffiliateLinkBuilder = () => {
     if (!selectedProduct) return;
-    window.open(`https://www.mercadolivre.com.br/afiliados/links`, '_blank');
-    toast.success("Abrindo Painel de Afiliados...", { icon: '🔗' });
+    const marketplace = resolveProductMarketplace(selectedProduct);
+    window.open(marketplace.affiliatePortal, '_blank', 'noopener,noreferrer');
+    toast.success('Abrindo o portal de afiliados da ' + marketplace.name + '...', { icon: '🔗' });
   };
 
   // Helper to determine which label to show, ignoring generic defaults
@@ -703,13 +779,8 @@ export default function App() {
   };
 
   const formatText = (p: Product) => {
-    const formatPrice = (price: string | number) => {
-      if (price === undefined || price === null || String(price).trim() === '') return '';
-      const p = String(price).replace(/R\$\s*/g, '').replace(/\s/g, '').trim();
-      if (/^\d+$/.test(p)) return `R$ ${p},00`;
-      if (/^\d+[\.,]\d$/.test(p)) return `R$ ${p.replace('.', ',')}0`;
-      return `R$ ${p.replace('.', ',')}`;
-    };
+    const formatPrice = (price: string | number) => formatCurrency(price);
+    const marketplace = resolveProductMarketplace(p);
 
     // Some imported cards contain a previously formatted ad inside the title.
     // Keep only the actual product name so price, store and links are not repeated.
@@ -723,12 +794,13 @@ export default function App() {
       p.isHighlight ? `🚨 🎉 *SUPER OFERTA* 🎉 🚨` : null,
       p.isHighlight ? `-------------------------` : null,
       `${globalSettings.showEmojiTitle ? globalSettings.emojiTitle + ' ' : ''}*${cleanTitle}*`,
-      `_Site Oficial ${p.store || 'Mercado Livre'}_`,
+      `_Site Oficial ${p.store || marketplace.name}_`,
       ``,
       p.originalPrice ? `${globalSettings.showEmojiPriceOriginal ? globalSettings.emojiPriceOriginal + ' ' : ''}${getEffectiveLabel(p.labelOriginalPrice, globalSettings.labelOriginalPrice)} ~${formatPrice(p.originalPrice)}~` : null,
       `${globalSettings.showEmojiPrice ? globalSettings.emojiPrice + ' ' : ''}${getEffectiveLabel(p.labelPrice, globalSettings.labelPrice)} *${formatPrice(p.price)}*`,
       p.coupon ? `${globalSettings.showEmojiCoupon ? globalSettings.emojiCoupon + ' ' : ''}${getEffectiveLabel(p.labelCoupon, globalSettings.labelCoupon)} *${p.coupon}*` : null,
       ``,
+      marketplace.id === 'amazon' ? '#ComissõesPorCompra' : null,
       p.link ? `${globalSettings.showEmojiGroup ? globalSettings.emojiGroup + ' ' : ''}${p.link}` : null,
       ``,
       `${getEffectiveLabel(p.labelGroupLink, globalSettings.labelGroupLink)}`,
@@ -779,7 +851,7 @@ export default function App() {
         toast.loading("Copiando foto...", { id: 'img-toast' });
         
         const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(selectedProduct.image)}`;
-        const response = await fetch(proxiedUrl);
+        const response = await fetch(proxiedUrl, { headers: await getApiAuthHeaders() });
         if (!response.ok) throw new Error("Erro na imagem");
         const blob = await response.blob();
 
@@ -847,7 +919,10 @@ export default function App() {
     if (!selectedProduct?.image) return;
     try {
       const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(selectedProduct.image)}`;
-      const response = await fetch(proxiedUrl);
+      const response = await fetch(proxiedUrl, { headers: await getApiAuthHeaders() });
+      if (!response.ok) throw new Error(`Imagem indisponível (${response.status}).`);
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.toLowerCase().startsWith('image/')) throw new Error('O endereço não retornou uma imagem válida.');
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -855,7 +930,8 @@ export default function App() {
       a.download = `produto-${selectedProduct.id}.png`;
       document.body.appendChild(a);
       a.click();
-      window.URL.revokeObjectURL(url);
+      a.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
     } catch (err) {
       window.open(selectedProduct.image, '_blank');
     }
@@ -867,7 +943,7 @@ export default function App() {
     try {
       toast.loading("Copiando imagem...", { id: 'copy-img-toast' });
       const proxiedUrl = `/api/proxy-image?url=${encodeURIComponent(selectedProduct.image)}`;
-      const response = await fetch(proxiedUrl);
+      const response = await fetch(proxiedUrl, { headers: await getApiAuthHeaders() });
       if (!response.ok) throw new Error("Erro na imagem");
       const blob = await response.blob();
 
@@ -919,7 +995,7 @@ export default function App() {
     try {
       const response = await fetch('/api/improve-title', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: await getApiAuthHeaders(true),
         body: JSON.stringify({ title: selectedProduct.title }),
       });
       const data = await response.json();
@@ -940,61 +1016,109 @@ export default function App() {
   const [bulkInput, setBulkInput] = useState('');
 
   const handleBulkImport = async (inputOverride?: string) => {
-    const rawInput = inputOverride || bulkInput;
-    if (typeof rawInput !== 'string') return;
-    
-    const input = rawInput.trim();
-    if (!input) return;
+    const rawInput = inputOverride ?? bulkInput;
+    if (!user || typeof rawInput !== 'string') {
+      toast.error('Entre na sua conta para importar produtos.');
+      return;
+    }
 
+    const input = rawInput.trim();
+    if (!input) {
+      toast.error('Cole o JSON capturado ou uma lista de links.');
+      return;
+    }
+
+    const normalizeKey = (value: unknown) => String(value ?? '').trim().toLowerCase().replace(/\/$/, '');
+    const existingKeys = new Set(products.flatMap((product) => [
+      product.link ? `link:${normalizeKey(product.link)}` : '',
+      `item:${normalizeKey(product.title)}|${normalizeKey(product.image)}`,
+    ]).filter(Boolean));
+
+    let parsed: unknown;
     try {
-      // Try to parse as JSON (from bookmarklet)
-      const data = JSON.parse(input);
-      if (Array.isArray(data) && user) {
-        const batchPromises = data.map((item: any) => 
-          addDoc(collection(db, 'users', user.uid, 'products'), {
-            userId: user.uid,
-            title: item.title || 'Produto sem título',
-            image: item.image || '',
-            price: item.price || '0,00',
-            originalPrice: item.originalPrice || item.price_from || item.priceOriginal || '',
-            coupon: item.coupon || globalSettings.defaultCoupon,
-            link: item.affiliate_link || item.link || '',
-            groupLink: globalSettings.groupLink,
-            category: item.category || autoCategorize(item.title),
-            store: item.store || 'Mercado Livre',
-            addedAt: Date.now(),
-            isHighlight: false,
-          })
-        );
-        await Promise.all(batchPromises);
-        setIsBulkModalOpen(false);
-        setBulkInput('');
-        toast.success(`${data.length} produtos importados!`);
+      parsed = JSON.parse(input);
+    } catch {
+      parsed = null;
+    }
+
+    if (Array.isArray(parsed)) {
+      const uniqueItems: Array<Record<string, unknown>> = [];
+      let ignored = 0;
+      for (const rawItem of parsed) {
+        if (!rawItem || typeof rawItem !== 'object') {
+          ignored++;
+          continue;
+        }
+        const item = rawItem as Record<string, unknown>;
+        const title = String(item.title ?? '').trim();
+        const image = String(item.image ?? '').trim();
+        const link = String(item.affiliate_link ?? item.link ?? '').trim();
+        const priceValue = parseCurrencyValue(String(item.price ?? ''));
+        const key = link ? `link:${normalizeKey(link)}` : `item:${normalizeKey(title)}|${normalizeKey(image)}`;
+        if (title.length < 4 || !image || priceValue === null || priceValue <= 0 || existingKeys.has(key)) {
+          ignored++;
+          continue;
+        }
+        existingKeys.add(key);
+        uniqueItems.push(item);
       }
-    } catch (e) {
-      // If not JSON, try to treat as list of links
-      const links = input.split('\n').map(l => l.trim()).filter(l => l.startsWith('http'));
-      if (links.length > 0) {
-        toast.loading(`Importando ${links.length} produtos...`, { id: 'bulk-load' });
-        Promise.all(links.map(link => fetchProduct(link))).then(() => {
-          toast.success('Importação concluída!', { id: 'bulk-load' });
-          setIsBulkModalOpen(false);
-          setBulkInput('');
-        }).catch(() => {
-          toast.error('Erro em alguns links.', { id: 'bulk-load' });
+
+      if (!uniqueItems.length) {
+        toast.error(ignored ? 'Nenhum produto novo e válido foi encontrado. Os duplicados foram ignorados.' : 'Nenhum produto válido foi encontrado.');
+        return;
+      }
+
+      toast.loading(`Importando ${uniqueItems.length} produto(s)...`, { id: 'bulk-load' });
+      await Promise.all(uniqueItems.map((item) => {
+        const title = String(item.title ?? '').trim();
+        const priceValue = parseCurrencyValue(String(item.price ?? ''))!;
+        const originalValue = parseCurrencyValue(String(item.originalPrice ?? item.price_from ?? item.priceOriginal ?? ''));
+        const importedLink = String(item.affiliate_link ?? item.link ?? '').trim();
+        const importedMarketplace = detectMarketplaceUrl(importedLink) || marketplaceFromStore(String(item.store ?? ''));
+        return addDoc(collection(db, 'users', user.uid, 'products'), {
+          userId: user.uid,
+          title,
+          image: String(item.image ?? '').trim(),
+          price: priceValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+          originalPrice: originalValue !== null && originalValue > priceValue
+            ? originalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+            : '',
+          coupon: String(item.coupon ?? '').trim() || globalSettings.defaultCoupon,
+          link: importedLink,
+          groupLink: globalSettings.groupLink,
+          category: String(item.category ?? '').trim() || autoCategorize(title),
+          store: String(item.store ?? '').trim() || importedMarketplace.name,
+          marketplace: importedMarketplace.id,
+          addedAt: Date.now(),
+          isHighlight: false,
         });
-      } else if (!inputOverride) {
-        alert('Formato inválido. Cole o JSON do favorito ou links.');
-      }
+      }));
+      setIsBulkModalOpen(false);
+      setBulkInput('');
+      const detail = ignored ? ` ${ignored} duplicado(s) ou inválido(s) foram ignorados.` : '';
+      toast.success(`${uniqueItems.length} produto(s) importado(s).${detail}`, { id: 'bulk-load' });
+      return;
+    }
+
+    const links = Array.from(new Set(input.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^https:\/\//i.test(line))))
+      .filter((link) => !existingKeys.has(`link:${normalizeKey(link)}`));
+    if (!links.length) {
+      toast.error('Nenhum link HTTPS novo foi encontrado.');
+      return;
+    }
+
+    toast.loading(`Importando ${links.length} produto(s)...`, { id: 'bulk-load' });
+    const results = await Promise.all(links.map((link) => fetchProduct(link, { silent: true })));
+    const imported = results.filter(Boolean).length;
+    const failed = links.length - imported;
+    if (imported > 0) {
+      setIsBulkModalOpen(false);
+      setBulkInput('');
+      toast.success(`${imported} produto(s) importado(s)${failed ? `; ${failed} falharam` : ''}.`, { id: 'bulk-load' });
+    } else {
+      toast.error('Nenhum produto pôde ser importado. Confira os links.', { id: 'bulk-load' });
     }
   };
-
-  useEffect(() => {
-    if (typeof bulkInput === 'string' && bulkInput.includes('[') && bulkInput.includes(']')) {
-      handleBulkImport(bulkInput);
-    }
-  }, [bulkInput]);
-
   if (authLoading) {
     return (
       <div className="h-screen w-full flex items-center justify-center bg-slate-50">
@@ -1008,18 +1132,18 @@ export default function App() {
 
   if (!user) {
     return (
-      <div className="h-screen w-full flex items-center justify-center bg-[#FFE600] p-6">
+      <div className="login-shell flex min-h-screen w-full items-center justify-center bg-slate-950 p-5 sm:p-8">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white p-12 rounded-[40px] shadow-2xl max-w-md w-full text-center space-y-8"
+          className="w-full max-w-md space-y-8 rounded-[32px] border border-slate-200 bg-white p-7 text-center shadow-2xl sm:p-10"
         >
-          <div className="w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center mx-auto shadow-lg shadow-blue-200">
-            <Zap className="text-white fill-white" size={40} />
+          <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-3xl bg-amber-400 shadow-xl shadow-amber-400/20">
+            <Zap className="fill-slate-950 text-slate-950" size={40} />
           </div>
           <div>
-            <h1 className="text-3xl font-black text-slate-900 tracking-tight leading-tight">ML Afiliados Pro</h1>
-            <p className="text-slate-500 font-medium mt-2">Plataforma Ninja para Consultores de Ofertas Mercado Livre.</p>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight leading-tight">Afiliados Pro</h1>
+            <p className="mt-3 text-base font-medium leading-relaxed text-slate-600">Crie, organize e publique ofertas do Mercado Livre, Amazon, AliExpress e Shopee com apresentação profissional.</p>
           </div>
           {loginError && (
             <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-left text-sm font-bold text-red-700">
@@ -1048,12 +1172,12 @@ export default function App() {
           </button>
           <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
              <div className="text-left">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Multi-Usuário</p>
-                <p className="text-[11px] font-bold text-slate-600">Seus dados salvos na nuvem.</p>
+                <p className="text-xs font-black uppercase tracking-wider text-slate-500">Multiusuário</p>
+                <p className="mt-1 text-sm font-semibold leading-snug text-slate-700">Seus dados ficam salvos na nuvem.</p>
              </div>
              <div className="text-left">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Script Ninja</p>
-                <p className="text-[11px] font-bold text-slate-600">Capture ofertas com um clique.</p>
+                <p className="text-xs font-black uppercase tracking-wider text-slate-500">Captura rápida</p>
+                <p className="mt-1 text-sm font-semibold leading-snug text-slate-700">Importe ofertas com poucos cliques.</p>
              </div>
           </div>
         </motion.div>
@@ -1062,7 +1186,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-slate-50 overflow-hidden font-sans text-slate-800 selection:bg-yellow-400 selection:text-black">
+    <div className="app-shell flex min-h-screen flex-col bg-slate-100 font-sans text-slate-800 selection:bg-amber-300 selection:text-slate-950 lg:h-screen lg:overflow-hidden">
       <Toaster position="top-center" />
       {/* Settings Modal */}
       <AnimatePresence>
@@ -1077,11 +1201,14 @@ export default function App() {
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.9, y: 20 }}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="settings-dialog-title"
               className="bg-white border border-slate-200 rounded-2xl p-8 max-w-lg w-full shadow-2xl space-y-6"
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-black text-slate-900 tracking-tight">Configurações Gerais</h2>
+                  <h2 id="settings-dialog-title" className="text-2xl font-black text-slate-900 tracking-tight">Configurações Gerais</h2>
                   <p className="text-slate-500 text-sm">Ajuste os dados que serão usados nos novos anúncios.</p>
                 </div>
                 <button 
@@ -1283,7 +1410,7 @@ export default function App() {
                   <Info size={12} /> Dica de Afiliado
                 </p>
                 <p className="text-[11px] text-blue-700 leading-tight">
-                  O Mercado Livre não permite gerar links de afiliado automaticamente sem API paga. Use o botão <b>"Converter em Afiliado"</b> no editor para abrir o site oficial e gerar seu link.
+                  O aplicativo preserva links afiliados já colados. Quando o link for comum, use <b>"Converter em Afiliado"</b> para abrir o portal oficial do marketplace e gerar seu link.
                 </p>
               </div>
 
@@ -1339,11 +1466,14 @@ export default function App() {
               initial={{ scale: 0.9, y: 20 }}
               animate={{ scale: 1, y: 0 }}
               exit={{ scale: 0.9, y: 20 }}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="bulk-dialog-title"
               className="bg-white border border-slate-200 rounded-2xl p-8 max-w-2xl w-full shadow-2xl space-y-6"
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-black text-slate-900 tracking-tight">Importação em Massa</h2>
+                  <h2 id="bulk-dialog-title" className="text-2xl font-black text-slate-900 tracking-tight">Importação em Massa</h2>
                   <p className="text-slate-500 text-sm">Cole o capturado pelo favorito ou uma lista de links.</p>
                 </div>
                 <button 
@@ -1369,7 +1499,7 @@ export default function App() {
                   Cancelar
                 </button>
                 <button 
-                  onClick={handleBulkImport}
+                  onClick={() => handleBulkImport()}
                   className="flex-1 py-3.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 transition-all shadow-md shadow-blue-100"
                 >
                   Importar Produtos
@@ -1381,121 +1511,150 @@ export default function App() {
       </AnimatePresence>
 
       {/* Header */}
-      <header className="bg-[#FFE600] border-b border-yellow-400 px-6 py-3 flex justify-between items-center shadow-sm relative z-50">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm">
-            <Zap className="text-blue-600 fill-blue-600" size={20} />
+      <header className="relative z-50 flex items-center justify-between gap-4 border-b border-slate-800 bg-slate-950 px-4 py-3 shadow-lg sm:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-amber-400 shadow-lg shadow-amber-400/20">
+            <Zap className="fill-slate-950 text-slate-950" size={22} />
           </div>
-          <div>
-            <h1 className="text-lg font-black leading-none text-slate-900">ML Afiliados Pro</h1>
-            <p className="text-[10px] uppercase tracking-wider text-slate-600 font-bold">Gerador de Anúncios Profissionais</p>
+          <div className="min-w-0">
+            <h1 className="truncate text-lg font-black leading-tight text-white sm:text-xl">Afiliados Pro</h1>
+            <p className="truncate text-xs font-semibold text-slate-400">Central profissional de anúncios</p>
           </div>
         </div>
-        <div className="flex gap-3">
+        <div className="flex items-center gap-2">
           {deferredPrompt && (
             <button 
               onClick={handleInstallClick}
-              className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-blue-700 transition-all border border-blue-500"
+              className="hidden items-center gap-2 rounded-xl border border-blue-500 bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-blue-500 sm:flex"
             >
-              <Smartphone size={14} /> Instalar App
+              <Smartphone size={17} /> Instalar app
             </button>
           )}
           <button 
             onClick={() => setIsSettingsOpen(true)}
-            className="hidden md:flex items-center gap-2 bg-white px-4 py-2 rounded-lg text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50 border border-slate-200 transition-all"
+            aria-label="Abrir configurações"
+            title="Configurações"
+            className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 p-2.5 text-sm font-bold text-slate-100 transition-all hover:border-slate-600 hover:bg-slate-800 sm:px-4"
           >
-            <Settings size={14} /> Configurações
+            <Settings size={18} /> <span className="hidden sm:inline">Configurações</span>
           </button>
           <button 
             onClick={() => setIsBulkModalOpen(true)}
-            className="hidden md:flex items-center gap-2 bg-white px-4 py-2 rounded-lg text-xs font-bold text-slate-700 shadow-sm hover:bg-slate-50 border border-slate-200 transition-all"
+            aria-label="Importar produtos em massa"
+            title="Importar em massa"
+            className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 p-2.5 text-sm font-bold text-slate-100 transition-all hover:border-slate-600 hover:bg-slate-800 sm:px-4"
           >
-            <Download size={14} /> Importar em Massa
+            <Download size={18} /> <span className="hidden md:inline">Importar em massa</span>
           </button>
           <button 
             onClick={handleLogout}
-            className="bg-slate-900 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm hover:bg-black transition-all flex items-center gap-2"
+            aria-label="Sair do aplicativo"
+            title="Sair"
+            className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 p-2.5 text-sm font-bold text-slate-100 transition-all hover:border-red-400 hover:bg-red-500/10 hover:text-red-300 sm:px-4"
           >
-            <LogOut size={14} /> Sair
+            <LogOut size={18} /> <span className="hidden lg:inline">Sair</span>
           </button>
         </div>
       </header>
 
-      <main className="flex-1 grid grid-cols-12 gap-0 overflow-hidden">
+      <nav className="grid grid-cols-3 border-b border-slate-200 bg-white p-2 shadow-sm lg:hidden" aria-label="Navegação principal">
+        {([
+          { id: 'products', label: 'Produtos', icon: Package, badge: products.length },
+          { id: 'editor', label: 'Editor', icon: LayoutDashboard },
+          { id: 'preview', label: 'Prévia', icon: Smartphone },
+        ] as const).map((item) => {
+          const Icon = item.icon;
+          const isActive = activeWorkspace === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setActiveWorkspace(item.id)}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                "flex min-h-12 items-center justify-center gap-2 rounded-xl px-2 text-sm font-bold transition-all",
+                isActive ? "bg-slate-950 text-white shadow-md" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              )}
+            >
+              <Icon size={18} />
+              <span>{item.label}</span>
+              {'badge' in item && <span className={cn("rounded-full px-2 py-0.5 text-xs tabular-nums", isActive ? "bg-amber-400 text-slate-950" : "bg-slate-100 text-slate-600")}>{item.badge}</span>}
+            </button>
+          );
+        })}
+      </nav>
+
+      <main className="grid min-h-0 flex-1 grid-cols-12 gap-0 overflow-visible lg:overflow-hidden">
         
         {/* Left Column: Capture & List */}
-        <section className="col-span-12 lg:col-span-3 border-r border-slate-200 p-4 flex flex-col bg-slate-50 overflow-hidden">
-          <h2 className="text-[10px] font-black uppercase text-slate-400 mb-3 tracking-widest">1. Capturar Produtos</h2>
+        <section className={cn(
+          "col-span-12 min-h-0 flex-col border-r border-slate-200 bg-slate-100 p-4 lg:col-span-3 lg:flex lg:overflow-hidden xl:p-5",
+          activeWorkspace === 'products' ? "flex" : "hidden"
+        )}>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-blue-600">Etapa 1</p>
+              <h2 className="text-lg font-black text-slate-950">Produtos e fila</h2>
+            </div>
+            <span className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm font-bold text-slate-600 shadow-sm">{products.length} itens</span>
+          </div>
           
-          <div className="space-y-4 flex flex-col h-full overflow-hidden">
-            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+          <div className="flex flex-col space-y-4 lg:h-full lg:overflow-hidden">
+            <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div>
-                <label className="text-[10px] font-black block mb-1 text-slate-500 uppercase">Link Individual</label>
+                <label className="mb-2 block text-xs font-black uppercase tracking-wide text-slate-600">Link individual do produto</label>
                 <input 
                   type="text" 
                   value={inputUrl}
                   onChange={(e) => setInputUrl(e.target.value)}
-                  placeholder="Cole o link meli.la..." 
-                  className="w-full text-xs p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-1 focus:ring-blue-400 outline-none transition-all"
+                  placeholder="Cole o link do Mercado Livre, Amazon, AliExpress ou Shopee..."
+                  className="w-full rounded-xl border border-slate-300 bg-slate-50 p-3.5 text-sm font-medium outline-none transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-100"
                 />
+                <div className="mt-2 flex flex-wrap gap-1.5" aria-label="Marketplaces aceitos">
+                  {MARKETPLACES.map((marketplace) => (
+                    <span key={marketplace.id} className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[9px] font-black uppercase tracking-wide text-slate-600">
+                      {marketplace.name}
+                    </span>
+                  ))}
+                </div>
               </div>
               <button 
                 onClick={() => fetchProduct(inputUrl)}
                 disabled={isLoading || !inputUrl}
-                className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-xs font-bold hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 py-3 text-sm font-bold text-white shadow-sm transition-all hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-blue-200 disabled:opacity-50"
               >
                 {isLoading ? <div className="w-4 h-4 border-2 border-white/20 border-t-white animate-spin rounded-full" /> : <><Plus size={14} /> Adicionar Produto</>}
               </button>
             </div>
 
-            <div className="bg-[#FFFBEB] p-4 rounded-2xl border border-amber-200 shadow-sm mb-2">
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-[11px] font-black text-amber-900 uppercase tracking-wider">Central de automação</span>
-                <span className="px-3 py-1 bg-white text-amber-800 border border-amber-200 rounded-lg text-[9px] font-black uppercase shadow-sm">2 etapas</span>
-              </div>
-              
-              <div className="bg-white rounded-xl border border-amber-100 p-4 space-y-4">
-                <div className="flex items-center gap-2 text-amber-900 mb-1">
-                  <Info size={14} className="text-amber-600" />
-                  <span className="text-[10px] font-black uppercase border-b-2 border-amber-400 leading-none">Como utilizar</span>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-6 h-6 bg-[#FBBF24] text-slate-900 rounded-full flex-shrink-0 flex items-center justify-center font-black text-[11px] shadow-sm">1</div>
-                    <p className="text-[10px] font-bold text-amber-900 uppercase">Use o botão <span className="bg-slate-900 text-white px-1.5 py-0.5 rounded text-[8px]">1. CAPTURAR</span> para buscar produtos.</p>
-                  </div>
-
-                  <div className="flex items-center gap-3 relative">
-                    <div className="absolute left-3 -top-3 w-[2px] h-3 bg-amber-200"></div>
-                    <div className="w-6 h-6 bg-[#FBBF24] text-slate-900 rounded-full flex-shrink-0 flex items-center justify-center font-black text-[11px] shadow-sm">2</div>
-                    <p className="text-[10px] font-bold text-amber-900">Marque os produtos na <b>FILA</b> que deseja postar.</p>
-                  </div>
-
-                  <div className="flex items-center gap-3 relative">
-                    <div className="absolute left-3 -top-3 w-[2px] h-3 bg-amber-200"></div>
-                    <div className="w-6 h-6 bg-[#FBBF24] text-slate-900 rounded-full flex-shrink-0 flex items-center justify-center font-black text-[11px] shadow-sm">3</div>
-                    <p className="text-[10px] font-bold text-amber-900 uppercase tracking-tight">Instale a extensão <b>ML Afiliados Sender</b> no Chrome.</p>
-                  </div>
-
-                  <div className="flex items-center gap-3 relative">
-                    <div className="absolute left-3 -top-3 w-[2px] h-3 bg-amber-200"></div>
-                    <div className="w-6 h-6 bg-[#FBBF24] text-slate-900 rounded-full flex-shrink-0 flex items-center justify-center font-black text-[11px] shadow-sm">4</div>
-                    <p className="text-[10px] font-bold text-amber-900">Clique em <b>ENVIAR PARA EXTENSÃO</b>, escolha o grupo e confirme no painel do WhatsApp.</p>
+            <details className="group rounded-2xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-amber-200">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-400 text-slate-950"><HelpCircle size={19} /></div>
+                  <div>
+                    <p className="text-sm font-black text-amber-950">Guia rápido de automação</p>
+                    <p className="text-xs font-semibold text-amber-700">Abra para ver o passo a passo</p>
                   </div>
                 </div>
-              </div>
-            </div>
+                <ChevronRight size={19} className="text-amber-700 transition-transform group-open:rotate-90" />
+              </summary>
+              <ol className="mt-4 space-y-3 border-t border-amber-200 pt-4 text-sm font-semibold leading-relaxed text-amber-950">
+                <li className="flex gap-3"><span className="step-number">1</span><span>Cole ofertas dos marketplaces aceitos ou capture o painel do Mercado Livre.</span></li>
+                <li className="flex gap-3"><span className="step-number">2</span><span>Marque na fila os produtos que deseja publicar.</span></li>
+                <li className="flex gap-3"><span className="step-number">3</span><span>Instale e mantenha ativa a extensão ML Afiliados Sender.</span></li>
+                <li className="flex gap-3"><span className="step-number">4</span><span>Envie para a extensão, escolha a conversa e confirme no WhatsApp.</span></li>
+              </ol>
+            </details>
 
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-black uppercase tracking-wider text-emerald-900">Extensão ML Afiliados Sender</p>
-                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.3 para Google Chrome</p>
+                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.5 para Google Chrome</p>
                 </div>
                 <a
-                  href="/ml-afiliados-sender-v1.0.4.zip"
-                  download="ml-afiliados-sender-v1.0.4.zip"
+                  href="/ml-afiliados-sender-v1.0.5.zip"
+                  download="ml-afiliados-sender-v1.0.5.zip"
                   className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase text-white shadow-sm transition hover:bg-emerald-700"
                 >
                   <Download size={14} /> Baixar extensão
@@ -1513,7 +1672,7 @@ export default function App() {
                   <li>Ative o <b>Modo do desenvolvedor</b> no canto superior direito.</li>
                   <li>Clique em <b>Carregar sem compactação</b>.</li>
                   <li>Selecione a pasta extraída que contém o arquivo <b>manifest.json</b>.</li>
-                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.4</b> e deixe a extensão ativada.</li>
+                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.5</b> e deixe a extensão ativada.</li>
                   <li>Fixe a extensão no ícone de quebra-cabeça do Chrome e abra o WhatsApp Web.</li>
                 </ol>
                 <p className="mt-3 rounded-lg bg-amber-50 p-2 text-[9px] font-bold text-amber-800">
@@ -1580,7 +1739,7 @@ export default function App() {
                       const timeout = window.setTimeout(() => {
                         window.removeEventListener('message', onExtensionAck);
                         toast.error('Extensão não encontrada. Instale ou ative a ML Afiliados Sender.');
-                      }, 2500);
+                      }, 6000);
                       function onExtensionAck(event: MessageEvent) {
                         const message = event.data;
                         if (event.source !== window || message?.source !== 'ml-afiliados-extension' || message?.type !== 'ML_EXTENSION_ACK' || message?.requestId !== requestId) return;
@@ -1683,7 +1842,17 @@ export default function App() {
                   filteredProducts.map(p => (
                     <motion.div 
                       key={p.id}
-                      onClick={() => setSelectedProductId(p.id)}
+                      onClick={() => { setSelectedProductId(p.id); setActiveWorkspace('editor'); }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setSelectedProductId(p.id);
+                          setActiveWorkspace('editor');
+                        }
+                      }}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Editar produto ${p.title}`}
                       className={cn(
                         "group flex items-center gap-3 p-2.5 rounded-xl border transition-all cursor-pointer relative overflow-hidden",
                         selectedProductId === p.id 
@@ -1703,6 +1872,17 @@ export default function App() {
                       <div className="flex items-center gap-3 flex-1 overflow-hidden">
                         <div 
                           onClick={(e) => { e.stopPropagation(); toggleProductSelection(p.id, !!p.selected); }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              toggleProductSelection(p.id, !!p.selected);
+                            }
+                          }}
+                          role="checkbox"
+                          aria-checked={!!p.selected}
+                          aria-label={`Selecionar ${p.title} para envio`}
+                          tabIndex={0}
                           className={cn(
                             "w-4 h-4 rounded border flex items-center justify-center transition-all flex-shrink-0",
                             p.selected ? "bg-blue-500 border-blue-500" : "bg-white border-slate-300"
@@ -1723,6 +1903,9 @@ export default function App() {
                       <div className="overflow-hidden flex-1">
                         <div className="flex items-center gap-1.5 mb-0.5">
                           <span className="px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded text-[8px] font-black uppercase whitespace-nowrap border border-blue-100">
+                            {resolveProductMarketplace(p).name}
+                          </span>
+                          <span className="hidden px-1.5 py-0.5 bg-slate-50 text-slate-500 rounded text-[8px] font-black uppercase whitespace-nowrap border border-slate-100 xl:inline">
                             {p.category || 'Geral'}
                           </span>
                           {p.isHighlight && (
@@ -1737,7 +1920,7 @@ export default function App() {
                       </div>
                       <button 
                         onClick={(e) => { e.stopPropagation(); deleteProduct(p.id); }}
-                        className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-400 hover:text-red-500 transition-all flex-shrink-0"
+                        aria-label={`Excluir ${p.title}`} title="Excluir produto" className="flex-shrink-0 rounded-lg p-2 text-slate-400 opacity-100 transition-all hover:bg-red-50 hover:text-red-600 lg:opacity-0 lg:group-hover:opacity-100"
                       >
                         <Trash2 size={12} />
                       </button>
@@ -1750,8 +1933,20 @@ export default function App() {
         </section>
 
         {/* Center Column: Editor */}
-        <section className="col-span-12 lg:col-span-5 bg-white border-r border-slate-200 p-8 overflow-y-auto custom-scrollbar">
-          <h2 className="text-[10px] font-black uppercase text-slate-400 mb-6 tracking-widest">2. Editor de Promoção</h2>
+        <section className={cn(
+          "col-span-12 min-h-0 border-r border-slate-200 bg-white p-5 lg:col-span-5 lg:block lg:overflow-y-auto lg:p-8 custom-scrollbar",
+          activeWorkspace === 'editor' ? "block" : "hidden"
+        )}>
+          <div className="mx-auto mb-6 flex max-w-xl items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-blue-600">Etapa 2</p>
+              <h2 className="text-xl font-black text-slate-950">Editar anúncio</h2>
+              <p className="mt-1 text-sm font-medium text-slate-500">Revise as informações antes de publicar.</p>
+            </div>
+            <button type="button" onClick={() => setActiveWorkspace('preview')} className="flex items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-200 lg:hidden">
+              Ver prévia <ChevronRight size={16} />
+            </button>
+          </div>
           
           {localProduct ? (
             <div className="space-y-6 max-w-xl mx-auto">
@@ -1945,7 +2140,7 @@ export default function App() {
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
                   <label className="text-[10px] font-black text-slate-500 uppercase tracking-tight">Link de Afiliado</label>
-                  {!localProduct.link.includes('/sec/') && !localProduct.link.includes('redirect') && !localProduct.link.includes('ml-social-selling') && !localProduct.link.includes('meli.la') && (
+                  {!isAffiliateLink(localProduct.link, resolveProductMarketplace(localProduct).id) && (
                     <button 
                       onClick={openAffiliateLinkBuilder}
                       className="text-[9px] font-black uppercase text-blue-600 hover:underline flex items-center gap-1"
@@ -1962,12 +2157,12 @@ export default function App() {
                     onChange={(e) => handleLocalUpdate({ link: e.target.value })}
                     className={cn(
                       "w-full text-sm p-4 pl-12 border rounded-xl font-medium bg-slate-50 focus:ring-1 focus:ring-blue-400 outline-none transition-all truncate",
-                      !localProduct.link.includes('/sec/') && !localProduct.link.includes('redirect') && !localProduct.link.includes('ml-social-selling') && !localProduct.link.includes('meli.la')
+                      !isAffiliateLink(localProduct.link, resolveProductMarketplace(localProduct).id)
                         ? "border-yellow-200 text-slate-600"
                         : "border-green-200 text-green-700 font-bold"
                     )}
                   />
-                  {(!localProduct.link.includes('/sec/') && !localProduct.link.includes('redirect') && !localProduct.link.includes('ml-social-selling') && !localProduct.link.includes('meli.la')) && (
+                  {(!isAffiliateLink(localProduct.link, resolveProductMarketplace(localProduct).id)) && (
                     <div className="absolute right-3 top-3.5 flex items-center gap-1 text-[9px] font-black bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full uppercase">
                       <Info size={10} /> Link Comum
                     </div>
@@ -2033,8 +2228,18 @@ export default function App() {
         </section>
 
         {/* Right Column: Live Preview */}
-        <section className="col-span-12 lg:col-span-4 bg-slate-200 p-8 flex justify-center overflow-y-auto custom-scrollbar">
-          <div className="w-full max-w-[340px] bg-[#E5DDD5] rounded-[40px] border-[10px] border-slate-900 shadow-2xl relative overflow-hidden flex flex-col h-[600px] my-auto">
+        <section className={cn(
+          "col-span-12 min-h-0 flex-col items-center overflow-y-auto bg-slate-200 p-5 lg:col-span-4 lg:flex lg:p-8 custom-scrollbar",
+          activeWorkspace === 'preview' ? "flex" : "hidden"
+        )} aria-label="Prévia do anúncio no WhatsApp">
+          <div className="mb-5 flex w-full max-w-[380px] items-center justify-between lg:hidden">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Etapa 3</p>
+              <h2 className="text-xl font-black text-slate-950">Prévia no WhatsApp</h2>
+            </div>
+            <button type="button" onClick={() => setActiveWorkspace('editor')} className="rounded-xl bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-sm">Voltar ao editor</button>
+          </div>
+          <div className="relative my-auto flex h-[600px] w-full max-w-[340px] flex-col overflow-hidden rounded-[40px] border-[10px] border-slate-900 bg-[#E5DDD5] shadow-2xl">
             {/* WhatsApp Header */}
             <div className="bg-[#075E54] p-4 pt-12 flex items-center gap-3 shrink-0">
                <div className="w-10 h-10 rounded-full bg-slate-300 overflow-hidden flex items-center justify-center text-xl">🔥</div>
@@ -2099,7 +2304,7 @@ export default function App() {
                       {globalSettings.showEmojiTitle ? globalSettings.emojiTitle + ' ' : ''}
                       {localProduct.title}
                     </p>
-                    <p className="text-[12px] italic text-slate-400 font-serif">Site Oficial {localProduct.store || 'Mercado Livre'}</p>
+                    <p className="text-[12px] italic text-slate-400 font-serif">Site Oficial {localProduct.store || resolveProductMarketplace(localProduct).name}</p>
                     {localProduct.originalPrice && (
                       <p className="text-[12px] text-slate-400">
                         {globalSettings.showEmojiPriceOriginal ? globalSettings.emojiPriceOriginal + ' ' : ''}
@@ -2190,30 +2395,59 @@ export default function App() {
       </main>
 
       {/* Footer / Status Bar */}
-      <footer className="bg-white border-t border-slate-200 px-6 py-2.5 flex justify-between items-center text-[10px] font-bold text-slate-500 uppercase tracking-widest relative z-50">
+      <footer className="relative z-50 hidden items-center justify-between border-t border-slate-200 bg-white px-6 py-2.5 text-xs font-bold uppercase tracking-wider text-slate-500 sm:flex">
         <div className="flex items-center gap-6">
           <span className="flex items-center gap-2">
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span> Sistema Pronto
           </span>
-          <span className="hidden sm:inline">Automação: <b className="text-slate-800">Mercado Livre (Ativa)</b></span>
+          <span className="hidden sm:inline">Marketplaces: <b className="text-slate-800">4 ativos</b></span>
           <span className="hidden lg:inline">Usuário: <b className="text-blue-600 lowercase">{user.email}</b></span>
         </div>
         <div className="flex gap-4">
-          <span>v2.8.5 (Gold Edition)</span>
+          <span>v3.0.0 (Multi Marketplace)</span>
         </div>
       </footer>
 
       {/* Global CSS for scrollbar */}
       <style>{`
+        .app-shell [class~="text-[8px]"] { font-size: 0.625rem !important; line-height: 1.35 !important; }
+        .app-shell [class~="text-[9px]"] { font-size: 0.6875rem !important; line-height: 1.4 !important; }
+        .app-shell [class~="text-[10px]"] { font-size: 0.75rem !important; line-height: 1.45 !important; }
+        .app-shell [class~="text-[11px]"] { font-size: 0.8125rem !important; line-height: 1.45 !important; }
+        .app-shell input,
+        .app-shell textarea,
+        .app-shell select { font-size: 0.875rem !important; }
+        .app-shell button:focus-visible,
+        .app-shell a:focus-visible,
+        .login-shell button:focus-visible {
+          outline: 3px solid #60a5fa;
+          outline-offset: 2px;
+        }
+        .step-number {
+          display: inline-flex;
+          width: 1.75rem;
+          height: 1.75rem;
+          flex: 0 0 1.75rem;
+          align-items: center;
+          justify-content: center;
+          border-radius: 9999px;
+          background: #fbbf24;
+          color: #0f172a;
+          font-size: 0.75rem;
+          font-weight: 900;
+        }
+        @media (max-width: 1023px) {
+          .app-shell main > section { min-height: calc(100vh - 138px); }
+        }
         .custom-scrollbar::-webkit-scrollbar {
-          width: 5px;
-          height: 5px;
+          width: 7px;
+          height: 7px;
         }
         .custom-scrollbar::-webkit-scrollbar-track {
           background: transparent;
         }
         .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #e2e8f0;
+          background: #cbd5e1;
           border-radius: 10px;
         }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover {
