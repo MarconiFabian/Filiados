@@ -120,7 +120,7 @@ test('pacote mantém a proteção persistente contra anúncios duplicados', asyn
   assert.match(whatsapp, /ML_SEND_GUARD_RESERVE/);
   assert.match(whatsapp, /return \`v3-/);
   assert.match(whatsapp, /waitForSendConfirmation/);
-  assert.match(whatsapp, /status: 'uncertain'/);
+  assert.match(whatsapp, /logDelivery\('uncertain'/);
 });
 
 test('persistência usa IDs determinísticos e regras Firestore estritas', async () => {
