@@ -74,7 +74,6 @@ import {
   onSnapshot, 
   query, 
   orderBy, 
-  addDoc, 
   deleteDoc, 
   updateDoc,
   serverTimestamp,
@@ -103,6 +102,26 @@ function formatCurrency(value: string | number): string {
   const parsed = parseCurrencyValue(value);
   if (parsed === null) return '';
   return `R$ ${parsed.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function productStorageId(marketplace: string, link: string): string {
+  let normalized = link.trim().toLowerCase();
+  try {
+    const url = new URL(link);
+    url.hash = '';
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(utm_|matt_|fbclid|gclid|ref|source|campaign)/i.test(key)) url.searchParams.delete(key);
+    }
+    normalized = url.toString().replace(/\/$/, '').toLowerCase();
+  } catch {}
+
+  const source = `${marketplace}:${normalized}`;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index++) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `product-${marketplace.replace(/[^a-z0-9-]/gi, '-')}-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 interface Product {
@@ -325,14 +344,20 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
 
-  const toggleAllSelection = (select: boolean) => {
+  const toggleAllSelection = async (select: boolean) => {
     if (!user) return;
-    const batch = writeBatch(db);
-    products.forEach(p => {
-      const pRef = doc(db, 'users', user.uid, 'products', p.id);
-      batch.update(pRef, { selected: select });
-    });
-    batch.commit().catch(err => console.error("Error toggling all:", err));
+    try {
+      for (let start = 0; start < products.length; start += 450) {
+        const batch = writeBatch(db);
+        for (const product of products.slice(start, start + 450)) {
+          batch.update(doc(db, 'users', user.uid, 'products', product.id), { selected: select });
+        }
+        await batch.commit();
+      }
+    } catch (error) {
+      console.error('Erro ao selecionar todos:', error);
+      toast.error('Não foi possível atualizar toda a fila. Tente novamente.');
+    }
   };
 
   const toggleProductSelection = (id: string, current: boolean) => {
@@ -854,11 +879,12 @@ export default function App() {
         selected: false,
       };
 
-      const createdProduct = await addDoc(collection(db, `users/${user.uid}/products`), newProductData);
+      const createdProductId = productStorageId(marketplace.id, newProductData.link);
+      await setDoc(doc(db, 'users', user.uid, 'products', createdProductId), newProductData);
       if (!options.silent) {
         setInputUrl('');
         if (requiresManualPrice) {
-          setSelectedProductId(createdProduct.id);
+          setSelectedProductId(createdProductId);
           toast.success(shopeeCaptureWarning
             ? `${marketplace.name}: preço pendente. ${shopeeCaptureWarning}`
             : `${marketplace.name}: título e foto adicionados. Informe o preço no editor antes de enviar.`, { duration: 7000 });
@@ -1388,7 +1414,8 @@ export default function App() {
         const originalValue = parseCurrencyValue(String(item.originalPrice ?? item.price_from ?? item.priceOriginal ?? ''));
         const importedLink = String(item.affiliate_link ?? item.link ?? '').trim();
         const importedMarketplace = detectMarketplaceUrl(importedLink) || marketplaceFromStore(String(item.store ?? ''));
-        return addDoc(collection(db, 'users', user.uid, 'products'), {
+        const importedProductId = productStorageId(importedMarketplace.id, importedLink || `${title}|${String(item.image ?? '').trim()}`);
+        return setDoc(doc(db, 'users', user.uid, 'products', importedProductId), {
           userId: user.uid,
           title,
           image: String(item.image ?? '').trim(),
