@@ -14,7 +14,9 @@
     "firebase:login": "npx firebase-tools login",
     "firebase:deploy": "npx firebase-tools deploy --only firestore:rules,firestore:indexes",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "check": "npm run lint && npm test && npm run build"
   },
   "dependencies": {
     "@google/genai": "^2.16.0",
