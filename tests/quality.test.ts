@@ -144,3 +144,24 @@ test('deploy é determinístico e Firebase não depende de hostname fixo', async
   assert.doesNotMatch(firebase, /isProductionHost/);
   assert.match(firebase, /VITE_FIREBASE_AUTH_DOMAIN/);
 });
+
+test('extensão permite imagens somente em hosts oficiais dos marketplaces', async () => {
+  const [background, manifestText] = await Promise.all([
+    readFile('chrome-extension/background.js', 'utf8'),
+    readFile('chrome-extension/manifest.json', 'utf8'),
+  ]);
+  const manifest = JSON.parse(manifestText);
+  assert.match(background, /media-amazon\\\.com/);
+  assert.match(background, /alicdn\\\.com/);
+  assert.ok(manifest.host_permissions.includes('https://*.media-amazon.com/*'));
+  assert.ok(manifest.host_permissions.includes('https://*.alicdn.com/*'));
+  assert.equal(manifest.minimum_chrome_version, '121');
+});
+
+test('CSP de produção não permite unsafe-eval', async () => {
+  const vercel = JSON.parse(await readFile('vercel.json', 'utf8'));
+  const headers = vercel.headers.find((entry: { source: string }) => entry.source === '/(.*)').headers;
+  const csp = headers.find((entry: { key: string }) => entry.key === 'Content-Security-Policy').value;
+  assert.doesNotMatch(csp, /unsafe-eval/);
+  assert.match(csp, /script-src 'self'/);
+});
