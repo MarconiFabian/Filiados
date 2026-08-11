@@ -528,7 +528,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         const url = new URL(message.url);
-        const allowedImageHost = /(^|\.)(mlstatic\.com|susercontent\.com)$/i.test(url.hostname);
+        const allowedImageHost = /(^|\.)(mlstatic\.com|susercontent\.com|media-amazon\.com|ssl-images-amazon\.com|images-amazon\.com|alicdn\.com|aliexpress-media\.com)$/i.test(url.hostname);
         if (url.protocol !== 'https:' || !allowedImageHost) throw new Error('Domínio de imagem não permitido.');
         const response = await fetch(url.toString(), { credentials: 'omit', cache: 'no-store' });
         if (!response.ok) throw new Error(`Foto respondeu HTTP ${response.status}.`);
