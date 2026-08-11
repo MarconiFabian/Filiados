@@ -18,7 +18,12 @@
     "https://*.mlstatic.com/*",
     "https://shopee.com.br/*",
     "https://*.shopee.com.br/*",
-    "https://*.susercontent.com/*"
+    "https://*.susercontent.com/*",
+    "https://*.media-amazon.com/*",
+    "https://*.ssl-images-amazon.com/*",
+    "https://*.images-amazon.com/*",
+    "https://*.alicdn.com/*",
+    "https://*.aliexpress-media.com/*"
   ],
   "background": {
     "service_worker": "background.js"
