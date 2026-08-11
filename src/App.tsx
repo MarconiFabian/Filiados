@@ -253,6 +253,28 @@ function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture
   });
 }
 
+async function downloadExtensionArchive() {
+  try {
+    const response = await fetch('/ml-afiliados-sender-v1.0.7.zip.b64', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Download respondeu HTTP ${response.status}.`);
+    const encoded = (await response.text()).replace(/\s+/g, '');
+    const binary = window.atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+
+    const objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = 'ml-afiliados-sender-v1.0.7.zip';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 2_000);
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : 'Não foi possível baixar a extensão.');
+  }
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -1741,13 +1763,13 @@ export default function App() {
                   <p className="text-[11px] font-black uppercase tracking-wider text-emerald-900">Extensão ML Afiliados Sender</p>
                   <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.7 para Google Chrome</p>
                 </div>
-                <a
-                  href="/ml-afiliados-sender-v1.0.7.zip"
-                  download="ml-afiliados-sender-v1.0.7.zip"
+                <button
+                  type="button"
+                  onClick={downloadExtensionArchive}
                   className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase text-white shadow-sm transition hover:bg-emerald-700"
                 >
                   <Download size={14} /> Baixar extensão
-                </a>
+                </button>
               </div>
 
               <details className="mt-4 rounded-xl border border-emerald-200 bg-white p-3">
