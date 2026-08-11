@@ -242,10 +242,10 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 
 type ShopeeExtensionCapture = {
   ok?: boolean;
-  price?: unknown;
-  originalPrice?: unknown;
-  title?: unknown;
-  image?: unknown;
+  price?: string | number;
+  originalPrice?: string | number;
+  title?: string;
+  image?: string;
   error?: string;
 };
 
