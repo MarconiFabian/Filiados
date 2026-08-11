@@ -122,3 +122,25 @@ test('pacote mantém a proteção persistente contra anúncios duplicados', asyn
   assert.match(whatsapp, /waitForSendConfirmation/);
   assert.match(whatsapp, /status: 'uncertain'/);
 });
+
+test('persistência usa IDs determinísticos e regras Firestore estritas', async () => {
+  const [app, rules] = await Promise.all([
+    readFile('src/App.tsx', 'utf8'),
+    readFile('firestore.rules', 'utf8'),
+  ]);
+  assert.match(app, /function productStorageId/);
+  assert.doesNotMatch(app, /addDoc\(/);
+  assert.match(rules, /keys\(\)\.hasOnly/);
+  assert.match(rules, /data\.marketplace in \[/);
+});
+
+test('deploy é determinístico e Firebase não depende de hostname fixo', async () => {
+  const [vercelText, firebase] = await Promise.all([
+    readFile('vercel.json', 'utf8'),
+    readFile('src/lib/firebase.ts', 'utf8'),
+  ]);
+  const vercel = JSON.parse(vercelText);
+  assert.equal(vercel.buildCommand, 'npm ci && npm run build');
+  assert.doesNotMatch(firebase, /isProductionHost/);
+  assert.match(firebase, /VITE_FIREBASE_AUTH_DOMAIN/);
+});
