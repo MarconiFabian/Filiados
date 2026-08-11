@@ -5,13 +5,11 @@ import { getFirestore } from 'firebase/firestore';
 // No AI Studio, usamos o arquivo firebase-applet-config.json se disponível.
 // No Vercel, usamos as variáveis de ambiente ou os valores padrão abaixo.
 
-const isProductionHost = typeof window !== 'undefined' && window.location.hostname === 'ml-afiliados-pro.vercel.app';
+const configuredAuthDomain = String(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '').trim();
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyAORPjsCqS06Wwm3iYkmN6eyYU8DIkMESs",
-  authDomain: isProductionHost
-    ? 'ml-afiliados-pro.vercel.app'
-    : import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'gen-lang-client-0772285066.firebaseapp.com',
+  authDomain: configuredAuthDomain || 'gen-lang-client-0772285066.firebaseapp.com',
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "gen-lang-client-0772285066",
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "gen-lang-client-0772285066.firebasestorage.app",
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "1033892989320",
