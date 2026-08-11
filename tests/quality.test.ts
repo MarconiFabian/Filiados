@@ -116,6 +116,9 @@ test('pacote mantém a proteção persistente contra anúncios duplicados', asyn
   assert.match(background, /ML_SEND_GUARD_RESERVE/);
   assert.match(background, /ML_SEND_GUARD_COMMIT/);
   assert.match(background, /mlSentHistoryV2/);
+  assert.match(background, /IN_FLIGHT_TTL_MS = 10 \* 60 \* 1000/);
   assert.match(whatsapp, /ML_SEND_GUARD_RESERVE/);
+  assert.match(whatsapp, /return \`v3-/);
+  assert.match(whatsapp, /waitForSendConfirmation/);
   assert.match(whatsapp, /status: 'uncertain'/);
 });
