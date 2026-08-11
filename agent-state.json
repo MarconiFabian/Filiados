@@ -1,0 +1,261 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "name": "Afiliados Pro",
+    "repository": "MarconiFabian/Filiados",
+    "version": "3.0.0",
+    "extensionVersion": "1.0.10",
+    "branch": "codex/agentic-quality-iteration-1-20260811",
+    "environment": "quality-iteration"
+  },
+  "iteration": 1,
+  "status": "IN_PROGRESS",
+  "updatedAt": "2026-08-11T00:00:00-03:00",
+  "marketplaces": [
+    "mercado-livre",
+    "amazon",
+    "aliexpress",
+    "shopee"
+  ],
+  "qualityGate": {
+    "verdict": "REJECTED",
+    "requiredScore": 90,
+    "currentScore": 76,
+    "provisional": true,
+    "openP0": 0,
+    "openP1": 2,
+    "criticalSecurity": 0,
+    "criticalTests": "PENDING",
+    "criticalFlows": "PENDING",
+    "criticalRegressions": 0
+  },
+  "issues": [
+    {
+      "id": "AFF-SHOPEE-001",
+      "category": "AFFILIATE",
+      "title": "Captura da Shopee seleciona frete como preço",
+      "severity": "P1",
+      "component": "Chrome extension",
+      "file": "chrome-extension/background.js",
+      "status": "FIXED_PENDING_VALIDATION",
+      "ownerAgent": "MARKETPLACE_AGENT",
+      "iterationCreated": 1,
+      "rootCause": "Fallback usava Math.min sobre todos os valores próximos ao título.",
+      "fix": "Remover seleção pelo menor valor, rejeitar contexto de frete/envio/entrega/parcelas e ranquear preços visíveis.",
+      "test": "tests/quality.test.ts - regressão de preço/frete",
+      "evidence": "Caso real: produto R$ 33,90 era salvo como frete R$ 9,62."
+    },
+    {
+      "id": "ARCH-001",
+      "category": "ARCHITECTURE",
+      "title": "Código-fonte da extensão divergente do ZIP distribuído",
+      "severity": "P1",
+      "component": "Extension release",
+      "file": "chrome-extension/*",
+      "status": "FIXED_PENDING_VALIDATION",
+      "ownerAgent": "ARCHITECT_AGENT",
+      "iterationCreated": 1,
+      "rootCause": "ZIP 1.0.9 foi atualizado sem sincronizar a pasta chrome-extension.",
+      "fix": "Sincronizar fontes e pacote na versão 1.0.10 e testar versão interna.",
+      "test": "tests/quality.test.ts - consistência app/fonte/ZIP"
+    },
+    {
+      "id": "QA-001",
+      "category": "QA",
+      "title": "Projeto sem suíte automatizada e sem CI",
+      "severity": "P1",
+      "component": "Quality pipeline",
+      "file": "package.json",
+      "status": "FIXED_PENDING_CI",
+      "ownerAgent": "QA_AGENT",
+      "iterationCreated": 1,
+      "fix": "Adicionar node:test e GitHub Actions com tipos, testes, build e audit crítico.",
+      "test": ".github/workflows/quality.yml"
+    },
+    {
+      "id": "RES-001",
+      "category": "RELIABILITY",
+      "title": "Rate limit em memória não é global em ambiente serverless",
+      "severity": "P2",
+      "component": "API",
+      "file": "lib/apiAuth.ts",
+      "status": "OPEN",
+      "ownerAgent": "PERFORMANCE_AGENT",
+      "iterationCreated": 1,
+      "impact": "Instâncias diferentes podem permitir mais requisições que o limite nominal."
+    },
+    {
+      "id": "SEC-001",
+      "category": "SECURITY",
+      "title": "CSP permite unsafe-eval e fontes HTTPS amplas",
+      "severity": "P2",
+      "component": "Headers",
+      "file": "vercel.json",
+      "status": "OPEN",
+      "ownerAgent": "SECURITY_AGENT",
+      "iterationCreated": 1,
+      "impact": "Reduz a proteção contra execução de script injetado."
+    },
+    {
+      "id": "ARCH-002",
+      "category": "ARCHITECTURE",
+      "title": "App.tsx concentra interface, autenticação, dados e integrações",
+      "severity": "P2",
+      "component": "Frontend",
+      "file": "src/App.tsx",
+      "status": "OPEN",
+      "ownerAgent": "ARCHITECT_AGENT",
+      "iterationCreated": 1,
+      "impact": "Aumenta risco de regressão e dificulta testes unitários."
+    },
+    {
+      "id": "AFF-TRACK-001",
+      "category": "AFFILIATE",
+      "title": "Tracking real dos quatro marketplaces ainda sem evidência controlada",
+      "severity": "P1",
+      "component": "Affiliate links",
+      "status": "BLOCKED_EXTERNAL_VALIDATION",
+      "ownerAgent": "MARKETPLACE_AGENT",
+      "iterationCreated": 1,
+      "impact": "Quality Gate de integrações não pode ser aprovado sem validar redirecionamento e identificador."
+    }
+  ],
+  "tests": [
+    {
+      "id": "TEST-STATIC-001",
+      "level": 1,
+      "name": "TypeScript noEmit",
+      "command": "npm run lint",
+      "status": "PENDING_CI",
+      "critical": true
+    },
+    {
+      "id": "TEST-UNIT-001",
+      "level": 2,
+      "name": "Preço Shopee API e URL segura",
+      "command": "npm test",
+      "status": "PENDING_CI",
+      "critical": true
+    },
+    {
+      "id": "TEST-REG-001",
+      "level": 2,
+      "name": "Não escolher frete como preço",
+      "command": "npm test",
+      "status": "PENDING_CI",
+      "critical": true
+    },
+    {
+      "id": "TEST-REG-002",
+      "level": 2,
+      "name": "Versão app/fonte/ZIP consistente",
+      "command": "npm test",
+      "status": "PENDING_CI",
+      "critical": true
+    },
+    {
+      "id": "TEST-REG-003",
+      "level": 2,
+      "name": "Trava persistente de duplicidade presente no pacote",
+      "command": "npm test",
+      "status": "PENDING_CI",
+      "critical": true
+    },
+    {
+      "id": "TEST-BUILD-001",
+      "level": 1,
+      "name": "Build de produção Vite",
+      "command": "npm run build",
+      "status": "PENDING_CI",
+      "critical": true
+    },
+    {
+      "id": "TEST-E2E-001",
+      "level": 4,
+      "name": "Fluxo usuário → produto → revisão → extensão → WhatsApp",
+      "status": "PENDING_MANUAL",
+      "critical": true
+    },
+    {
+      "id": "TEST-MKT-001",
+      "level": 6,
+      "name": "Links e tracking dos quatro marketplaces",
+      "status": "BLOCKED_EXTERNAL_VALIDATION",
+      "critical": true
+    }
+  ],
+  "criticalFlows": [
+    {
+      "id": "FLOW-001",
+      "name": "Capturar produto Shopee sem confundir frete",
+      "status": "PENDING_VALIDATION"
+    },
+    {
+      "id": "FLOW-002",
+      "name": "Revisar e enviar fila sem duplicar anúncios",
+      "status": "PENDING_VALIDATION"
+    },
+    {
+      "id": "FLOW-003",
+      "name": "Abrir link afiliado no produto correto com tracking",
+      "status": "BLOCKED_EXTERNAL_VALIDATION"
+    }
+  ],
+  "scoreHistory": [
+    {
+      "iteration": 1,
+      "phase": "DISCOVERY",
+      "score": 55,
+      "verdict": "REJECTED"
+    },
+    {
+      "iteration": 1,
+      "phase": "IMPLEMENTATION",
+      "score": 76,
+      "verdict": "REJECTED",
+      "note": "Score provisório; testes e validações reais pendentes."
+    }
+  ],
+  "changes": [
+    {
+      "iteration": 1,
+      "description": "Extensão 1.0.10 rejeita valores de frete/parcelas no fallback Shopee."
+    },
+    {
+      "iteration": 1,
+      "description": "Fontes da extensão sincronizadas com o ZIP distribuído."
+    },
+    {
+      "iteration": 1,
+      "description": "Suíte de regressão e workflow de Quality Gate adicionados."
+    },
+    {
+      "iteration": 1,
+      "description": "Estado multiagente persistente criado."
+    }
+  ],
+  "decisions": [
+    {
+      "id": "DEC-001",
+      "iteration": 1,
+      "decision": "Usar agent-state.json versionado como fonte de verdade inicial.",
+      "reason": "Não exige migração de banco e preserva histórico junto ao código; pode ser migrado para Firestore futuramente."
+    },
+    {
+      "id": "DEC-002",
+      "iteration": 1,
+      "decision": "Quality Gate permanece REJECTED até CI, E2E e tracking real passarem.",
+      "reason": "Impede autoaprovação e score artificial."
+    }
+  ],
+  "blockedItems": [
+    {
+      "id": "BLOCK-001",
+      "issueId": "AFF-TRACK-001",
+      "dependency": "Sessões reais dos programas de afiliados e validação controlada pelo titular.",
+      "attempts": 0,
+      "impactOnScore": 14,
+      "nextAction": "Validar amostras reais sem compra, envio em massa ou tráfego artificial."
+    }
+  ]
+}
