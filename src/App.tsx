@@ -198,6 +198,83 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
+type ShopeeExtensionCapture = {
+  ok?: boolean;
+  price?: unknown;
+  originalPrice?: unknown;
+  title?: unknown;
+  image?: unknown;
+  error?: string;
+};
+
+function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture> {
+  return new Promise((resolve, reject) => {
+    const requestId = `shopee-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let started = false;
+
+    const cleanup = () => {
+      window.removeEventListener('message', onMessage);
+      clearTimeout(startupTimeout);
+      clearTimeout(captureTimeout);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== window || event.origin !== window.location.origin) return;
+      const message = event.data;
+      if (message?.source !== 'ml-afiliados-extension' || message?.requestId !== requestId) return;
+
+      if (message.type === 'ML_SHOPEE_CAPTURE_STARTED') {
+        started = true;
+        clearTimeout(startupTimeout);
+        return;
+      }
+      if (message.type !== 'ML_SHOPEE_CAPTURE_ACK') return;
+
+      cleanup();
+      if (message.ok) resolve(message);
+      else reject(new Error(message.error || 'A extensão não conseguiu capturar o preço da Shopee.'));
+    };
+    const startupTimeout = window.setTimeout(() => {
+      if (started) return;
+      cleanup();
+      reject(new Error('Atualize a extensão ML Afiliados Sender para a versão 1.0.7.'));
+    }, 2_500);
+    const captureTimeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error('A Shopee demorou para abrir. Tente novamente.'));
+    }, 35_000);
+
+    window.addEventListener('message', onMessage);
+    window.postMessage({
+      source: 'ml-afiliados-pro',
+      type: 'ML_SHOPEE_CAPTURE',
+      requestId,
+      url,
+    }, window.location.origin);
+  });
+}
+
+async function downloadExtensionArchive() {
+  try {
+    const response = await fetch('/ml-afiliados-sender-v1.0.7.zip.b64', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Download respondeu HTTP ${response.status}.`);
+    const encoded = (await response.text()).replace(/\s+/g, '');
+    const binary = window.atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+
+    const objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = 'ml-afiliados-sender-v1.0.7.zip';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 2_000);
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : 'Não foi possível baixar a extensão.');
+  }
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -681,10 +758,31 @@ export default function App() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `Não foi possível capturar o produto (${res.status}).`);
 
-      const title = typeof data.title === 'string' ? data.title.trim() : '';
-      const image = typeof data.image === 'string' ? data.image.trim() : '';
-      const priceValue = parseCurrencyValue(data.price);
-      const requiresManualPrice = data.requiresManualPrice === true;
+      let title = typeof data.title === 'string' ? data.title.trim() : '';
+      let image = typeof data.image === 'string' ? data.image.trim() : '';
+      let priceValue = parseCurrencyValue(data.price);
+      let originalValue = parseCurrencyValue(data.originalPrice);
+      let requiresManualPrice = data.requiresManualPrice === true;
+      let shopeeCaptureWarning = '';
+
+      if (marketplace.id === 'shopee' && requiresManualPrice) {
+        try {
+          const captured = await captureShopeeWithExtension(normalizedUrl);
+          const capturedPrice = parseCurrencyValue(captured.price);
+          const capturedOriginalPrice = parseCurrencyValue(captured.originalPrice);
+          if (capturedPrice !== null && capturedPrice > 0) {
+            priceValue = capturedPrice;
+            originalValue = capturedOriginalPrice;
+            requiresManualPrice = false;
+          }
+          if (typeof captured.title === 'string' && captured.title.trim().length >= 8) title = captured.title.trim();
+          if (typeof captured.image === 'string' && captured.image.trim()) image = captured.image.trim();
+        } catch (captureError) {
+          shopeeCaptureWarning = captureError instanceof Error ? captureError.message : String(captureError);
+          console.warn('Captura da Shopee pela extensão não concluída:', captureError);
+        }
+      }
+
       if (title.length < 8 || !image) {
         throw new Error(`${marketplace.name} não forneceu título e foto válidos. Tente outro link do produto.`);
       }
@@ -692,7 +790,6 @@ export default function App() {
         throw new Error(`${marketplace.name} não forneceu um preço válido. Tente outro link do produto.`);
       }
 
-      const originalValue = parseCurrencyValue(data.originalPrice);
       const originalPrice = priceValue !== null && originalValue !== null && originalValue > priceValue
         ? originalValue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         : '';
@@ -720,7 +817,9 @@ export default function App() {
         setInputUrl('');
         if (requiresManualPrice) {
           setSelectedProductId(createdProduct.id);
-          toast.success(`${marketplace.name}: título e foto adicionados. Informe o preço no editor antes de enviar.`);
+          toast.success(shopeeCaptureWarning
+            ? `${marketplace.name}: preço pendente. ${shopeeCaptureWarning}`
+            : `${marketplace.name}: título e foto adicionados. Informe o preço no editor antes de enviar.`, { duration: 7000 });
         } else {
           toast.success(`${marketplace.name}: produto adicionado à fila.`);
         }
@@ -1662,15 +1761,15 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-black uppercase tracking-wider text-emerald-900">Extensão ML Afiliados Sender</p>
-                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.6 para Google Chrome</p>
+                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.7 para Google Chrome</p>
                 </div>
-                <a
-                  href="/ml-afiliados-sender-v1.0.6.zip"
-                  download="ml-afiliados-sender-v1.0.6.zip"
+                <button
+                  type="button"
+                  onClick={downloadExtensionArchive}
                   className="flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-[10px] font-black uppercase text-white shadow-sm transition hover:bg-emerald-700"
                 >
                   <Download size={14} /> Baixar extensão
-                </a>
+                </button>
               </div>
 
               <details className="mt-4 rounded-xl border border-emerald-200 bg-white p-3">
