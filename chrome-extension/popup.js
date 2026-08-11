@@ -17,8 +17,13 @@ document.getElementById('clear').onclick = async () => {
   refresh();
 };
 document.getElementById('clearHistory').onclick = async () => {
+  const active = await chrome.storage.local.get(['mlInFlightSendV2', 'mlRunState']);
+  if (active.mlInFlightSendV2 || active.mlRunState?.status === 'running') {
+    alert('Pare a fila e aguarde a confirmação do envio atual antes de limpar o histórico.');
+    return;
+  }
   if (!confirm('Liberar anúncios enviados nos últimos 7 dias? Eles poderão ser enviados novamente.')) return;
-  await chrome.storage.local.remove(['mlSentHistoryV2', 'mlInFlightSendV2', 'mlDeliveryLogV3']);
+  await chrome.storage.local.remove(['mlSentHistoryV2', 'mlDeliveryLogV3']);
   await chrome.storage.local.set({ mlLastStatus: 'Histórico de proteção liberado manualmente.', mlLastStatusAt: Date.now(), mlLastError: '' });
   refresh();
 };
