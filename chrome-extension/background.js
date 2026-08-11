@@ -47,6 +47,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const SENT_HISTORY_KEY = 'mlSentHistoryV2';
 const IN_FLIGHT_KEY = 'mlInFlightSendV2';
 const SEND_HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const IN_FLIGHT_TTL_MS = 10 * 60 * 1000;
+const RUN_STATE_TTL_MS = 6 * 60 * 60 * 1000;
 const SEND_HISTORY_LIMIT = 500;
 const DELIVERY_LOG_KEY = 'mlDeliveryLogV3';
 const DELIVERY_LOG_LIMIT = 300;
@@ -82,7 +84,7 @@ async function readSendGuardState() {
       .slice(0, SEND_HISTORY_LIMIT)
   );
   const rawInFlight = state[IN_FLIGHT_KEY];
-  const inFlight = rawInFlight && Number(rawInFlight.reservedAt) > now - SEND_HISTORY_TTL_MS
+  const inFlight = rawInFlight && Number(rawInFlight.reservedAt) > now - IN_FLIGHT_TTL_MS
     ? rawInFlight
     : null;
   if (Object.keys(history).length !== Object.keys(rawHistory).length || Boolean(rawInFlight) !== Boolean(inFlight)) {
@@ -92,7 +94,7 @@ async function readSendGuardState() {
 }
 
 function validFingerprint(value) {
-  return typeof value === 'string' && /^v2-[a-f0-9-]{20,80}$/i.test(value);
+  return typeof value === 'string' && /^v[23]-[a-f0-9-]{20,120}$/i.test(value);
 }
 
 function cleanMeta(value, maxLength = 300) {
@@ -435,7 +437,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse(await getSendHistory());
           return;
         }
-        await chrome.storage.local.remove([SENT_HISTORY_KEY, IN_FLIGHT_KEY, DELIVERY_LOG_KEY]);
+        const active = await chrome.storage.local.get(IN_FLIGHT_KEY);
+        if (active[IN_FLIGHT_KEY]) {
+          throw new Error('Existe um envio em confirmação. Pare a fila e aguarde antes de limpar o histórico.');
+        }
+        await chrome.storage.local.remove([SENT_HISTORY_KEY, DELIVERY_LOG_KEY]);
         sendResponse({ ok: true });
       } catch (error) {
         sendResponse({ ok: false, error: error?.message || String(error) });
@@ -491,6 +497,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return true;
         });
         if (!items.length) throw new Error('Fila vazia.');
+
+        const execution = await chrome.storage.local.get(['mlRunState', IN_FLIGHT_KEY]);
+        const activeRun = execution.mlRunState?.status === 'running'
+          && Number(execution.mlRunState.startedAt) > Date.now() - RUN_STATE_TTL_MS;
+        if (activeRun || execution[IN_FLIGHT_KEY]) {
+          throw new Error('Já existe uma fila em execução ou confirmação. Pare e aguarde antes de enviar outra fila.');
+        }
 
         await chrome.storage.local.set({
           mlQueue: items,
