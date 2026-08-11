@@ -15,10 +15,39 @@
     return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
   }
 
+  function canonicalProductIdentity(item) {
+    const marketplace = normalizeFingerprintPart(item?.marketplace || 'unknown');
+    try {
+      const url = new URL(String(item?.link || ''));
+      const host = url.hostname.toLowerCase();
+      const path = decodeURIComponent(url.pathname).replace(/\/+$/, '');
+
+      const mercadoLivre = path.match(/\b(MLB-?\d{6,})\b/i);
+      const amazon = path.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:\/|$)/i);
+      const aliExpress = path.match(/\/item\/(\d+)\.html/i);
+      const shopee = path.match(/\/(?:product|opaanlp)\/(\d+)\/(\d+)(?:\/|$)/i)
+        || path.match(/(?:^|[-/])i\.(\d+)\.(\d+)(?:\/|$)/i);
+
+      if (mercadoLivre) return `mercado-livre:${mercadoLivre[1].replace('-', '').toUpperCase()}`;
+      if (amazon) return `amazon:${amazon[1].toUpperCase()}`;
+      if (aliExpress) return `aliexpress:${aliExpress[1]}`;
+      if (shopee) return `shopee:${shopee[1]}:${shopee[2]}`;
+
+      const keep = new URLSearchParams();
+      for (const key of ['item_id', 'itemid', 'shop_id', 'shopid']) {
+        if (url.searchParams.has(key)) keep.set(key, url.searchParams.get(key));
+      }
+      return `${marketplace}:${host}${path}${keep.size ? `?${keep}` : ''}`;
+    } catch {
+      return '';
+    }
+  }
+
   function fingerprintItem(item) {
+    const identity = canonicalProductIdentity(item);
     const image = normalizeFingerprintPart(item?.image).replace(/[?#].*$/, '');
-    const text = normalizeFingerprintPart(item?.text);
-    const source = `${image}\n${text}`;
+    const title = normalizeFingerprintPart(item?.title);
+    const source = identity || `${image}\n${title}`;
     let first = 0x811c9dc5;
     let second = 0x9e3779b9;
     for (let index = 0; index < source.length; index++) {
@@ -28,7 +57,7 @@
       second ^= code + index;
       second = Math.imul(second, 0x85ebca6b);
     }
-    return `v2-${(first >>> 0).toString(16).padStart(8, '0')}-${(second >>> 0).toString(16).padStart(8, '0')}-${source.length}`;
+    return `v3-${(first >>> 0).toString(16).padStart(8, '0')}-${(second >>> 0).toString(16).padStart(8, '0')}-${source.length}`;
   }
 
   async function sendGuard(type, payload) {
@@ -59,8 +88,26 @@
     } catch {}
   }
 
+  function outgoingMessageCount() {
+    return document.querySelectorAll('#main [data-id^="true_"], #main [data-id*="true_"]').length;
+  }
+
+  async function waitForSendConfirmation(previousCount, previewRoot) {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (outgoingMessageCount() > previousCount) return true;
+      if (previewRoot && !document.contains(previewRoot)) {
+        await sleep(500);
+        if (outgoingMessageCount() > previousCount) return true;
+      }
+      await sleep(200);
+    }
+    return false;
+  }
+
   async function clickWithProtection(button, payload) {
     await sendGuard(SEND_GUARD_TYPES.RESERVE, payload);
+    const previousCount = outgoingMessageCount();
+    const previewRoot = button.closest?.('[role="dialog"]') || null;
     try {
       button.click();
     } catch (error) {
@@ -68,10 +115,18 @@
       uncertain.sendWasClicked = true;
       throw uncertain;
     }
+
+    const confirmed = await waitForSendConfirmation(previousCount, previewRoot);
+    if (!confirmed) {
+      const uncertain = new Error('O WhatsApp não confirmou visualmente a nova mensagem. Confira a conversa; não haverá repetição automática.');
+      uncertain.sendWasClicked = true;
+      throw uncertain;
+    }
+
     try {
       await sendGuard(SEND_GUARD_TYPES.COMMIT, payload);
     } catch (error) {
-      const uncertain = new Error(`O anúncio pode ter sido enviado, mas o registro final falhou: ${error?.message || error}`);
+      const uncertain = new Error(`O anúncio foi confirmado na conversa, mas o registro final falhou: ${error?.message || error}`);
       uncertain.sendWasClicked = true;
       throw uncertain;
     }
@@ -263,6 +318,7 @@
 
       const delay = Math.max(5, Math.min(300, Number(state.mlDelaySeconds) || 30));
       const queueId = String(state.mlQueueCreatedAt || Date.now());
+      await chrome.storage.local.set({ mlRunState: { status: 'running', queueId, startedAt: Date.now() } });
       let index = Math.max(0, Math.min(queue.length, Number(state.mlQueueIndex) || 0));
       if (!queue.length) {
         setStatus('A fila está vazia. Volte ao ML Afiliados Pro e envie novamente.', true);
@@ -270,6 +326,10 @@
       }
 
       const advance = async (nextIndex) => {
+        const current = await chrome.storage.local.get(['mlQueueCreatedAt', 'mlRunState']);
+        if (String(current.mlQueueCreatedAt || '') !== queueId || current.mlRunState?.queueId !== queueId) {
+          throw new Error('A fila mudou durante o envio. Execução pausada para evitar duplicação.');
+        }
         await chrome.storage.local.set({ mlQueueIndex: nextIndex });
         setProgress(nextIndex, queue.length);
       };
@@ -385,6 +445,7 @@
       setStatus(`Falha inesperada: ${error?.message || error}`, true);
     } finally {
       running = false;
+      await chrome.storage.local.set({ mlRunState: { status: 'idle', stoppedAt: Date.now() } }).catch(() => {});
       start.disabled = false;
       start.style.opacity = '1';
     }
