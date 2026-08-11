@@ -236,7 +236,7 @@ function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture
     const startupTimeout = window.setTimeout(() => {
       if (started) return;
       cleanup();
-      reject(new Error('Atualize a extensão ML Afiliados Sender para a versão 1.0.7.'));
+      reject(new Error('Atualize a extensão ML Afiliados Sender para a versão 1.0.8.'));
     }, 2_500);
     const captureTimeout = window.setTimeout(() => {
       cleanup();
@@ -255,7 +255,7 @@ function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture
 
 async function downloadExtensionArchive() {
   try {
-    const response = await fetch('/ml-afiliados-sender-v1.0.7.zip.b64', { cache: 'no-store' });
+    const response = await fetch('/ml-afiliados-sender-v1.0.8.zip.b64', { cache: 'no-store' });
     if (!response.ok) throw new Error(`Download respondeu HTTP ${response.status}.`);
     const encoded = (await response.text()).replace(/\s+/g, '');
     const binary = window.atob(encoded);
@@ -265,7 +265,7 @@ async function downloadExtensionArchive() {
     const objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
     const anchor = document.createElement('a');
     anchor.href = objectUrl;
-    anchor.download = 'ml-afiliados-sender-v1.0.7.zip';
+    anchor.download = 'ml-afiliados-sender-v1.0.8.zip';
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -1761,7 +1761,7 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-black uppercase tracking-wider text-emerald-900">Extensão ML Afiliados Sender</p>
-                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.7 para Google Chrome</p>
+                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.8 para Google Chrome</p>
                 </div>
                 <button
                   type="button"
