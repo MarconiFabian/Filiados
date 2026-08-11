@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { extractShopeeApiProduct, shopeeProductIds } from '../api/scrape.ts';
-import { isAffiliateLink } from '../lib/marketplaces.ts';
+import * as cheerio from 'cheerio';
+import { extractProduct, extractShopeeApiProduct, shopeeProductIds } from '../api/scrape.ts';
+import { getMarketplace, isAffiliateLink } from '../lib/marketplaces.ts';
 import { parseMarketplaceUrl } from '../lib/security.ts';
 
 function readUint16(bytes: Buffer, offset: number) {
@@ -59,6 +60,29 @@ test('aceita link afiliado curto da Shopee e rejeita URL insegura', () => {
   assert.equal(isAffiliateLink('https://s.shopee.com.br/2gAFhInhqM', 'shopee'), true);
   assert.throws(() => parseMarketplaceUrl('http://shopee.com.br/produto'), /HTTPS/i);
   assert.throws(() => parseMarketplaceUrl('https://example.com/produto'), /Mercado Livre/i);
+});
+
+
+test('prioriza preço principal e ignora frete na página Shopee', () => {
+  const html = `
+    <h1>Jogo de lençol 200 fios</h1>
+    <div data-testid="pdp-product-price-before-discount">R$ 49,90</div>
+    <div data-testid="pdp-product-price">R$ 33,90</div>
+    <section>Frete <span>R$ 9,62</span></section>
+  `;
+  const product = extractProduct(getMarketplace('shopee'), cheerio.load(html), html);
+  assert.equal(product.currentValue, 33.9);
+  assert.equal(product.originalValue, 49.9);
+});
+
+test('não transforma preço de frete em preço de produto', () => {
+  const html = `
+    <h1>Jogo de lençol 200 fios</h1>
+    <section>Frete <span>R$ 9,62</span></section>
+    <script>{"shipping":{"price":962000}}</script>
+  `;
+  const product = extractProduct(getMarketplace('shopee'), cheerio.load(html), html);
+  assert.equal(product.currentValue, null);
 });
 
 test('regressão: fallback da extensão nunca escolhe o menor preço do escopo', async () => {
