@@ -32,7 +32,15 @@ import {
   PartyPopper,
   Percent,
   Globe,
-  HelpCircle
+  HelpCircle,
+  Activity,
+  History,
+  ShieldCheck,
+  AlertTriangle,
+  RefreshCw,
+  Clock3,
+  Wifi,
+  ListChecks
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
@@ -149,6 +157,40 @@ interface GlobalSettings {
   autoPostInterval: number;
 }
 
+interface DiagnosticSnapshot {
+  ok?: boolean;
+  version?: string;
+  whatsAppOpen?: boolean;
+  queueCount?: number;
+  queueIndex?: number;
+  protectedCount?: number;
+  historyCount?: number;
+  inFlight?: boolean;
+  lastStatus?: string;
+  lastError?: string;
+  lastStatusAt?: number;
+  checkedAt?: number;
+  selectedCount: number;
+  invalidSelectionCount: number;
+  missingImageCount: number;
+  error?: string;
+}
+
+interface DeliveryHistoryEntry {
+  id: string;
+  fingerprint?: string;
+  status: 'sent' | 'blocked' | 'failed' | 'uncertain';
+  mode?: 'image' | 'text' | '';
+  title?: string;
+  marketplace?: string;
+  price?: string;
+  link?: string;
+  image?: string;
+  detail?: string;
+  timestamp: number;
+}
+
+const REQUIRED_EXTENSION_VERSION = '1.0.9';
 const STORAGE_KEY = 'ml_afiliados_v1';
 
 enum OperationType {
@@ -236,7 +278,7 @@ function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture
     const startupTimeout = window.setTimeout(() => {
       if (started) return;
       cleanup();
-      reject(new Error('Atualize a extensão ML Afiliados Sender para a versão 1.0.8.'));
+      reject(new Error('Atualize a extensão ML Afiliados Sender para a versão 1.0.9.'));
     }, 2_500);
     const captureTimeout = window.setTimeout(() => {
       cleanup();
@@ -255,7 +297,7 @@ function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture
 
 async function downloadExtensionArchive() {
   try {
-    const response = await fetch('/ml-afiliados-sender-v1.0.8.zip.b64', { cache: 'no-store' });
+    const response = await fetch('/ml-afiliados-sender-v1.0.9.zip.b64', { cache: 'no-store' });
     if (!response.ok) throw new Error(`Download respondeu HTTP ${response.status}.`);
     const encoded = (await response.text()).replace(/\s+/g, '');
     const binary = window.atob(encoded);
@@ -265,7 +307,7 @@ async function downloadExtensionArchive() {
     const objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
     const anchor = document.createElement('a');
     anchor.href = objectUrl;
-    anchor.download = 'ml-afiliados-sender-v1.0.8.zip';
+    anchor.download = 'ml-afiliados-sender-v1.0.9.zip';
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -1125,6 +1167,166 @@ export default function App() {
 
   const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
   const [bulkInput, setBulkInput] = useState('');
+  const [isReviewOpen, setIsReviewOpen] = useState(false);
+  const [isDiagnosticOpen, setIsDiagnosticOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isQueueSending, setIsQueueSending] = useState(false);
+  const [isDiagnosticLoading, setIsDiagnosticLoading] = useState(false);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [diagnostic, setDiagnostic] = useState<DiagnosticSnapshot | null>(null);
+  const [deliveryHistory, setDeliveryHistory] = useState<DeliveryHistoryEntry[]>([]);
+
+  const requestExtensionBridge = (
+    requestType: string,
+    responseType: string,
+    payload: Record<string, unknown> = {},
+    timeoutMs = 8000
+  ): Promise<Record<string, any>> => new Promise((resolve, reject) => {
+    const requestId = `ml-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      window.removeEventListener('message', onMessage);
+    };
+    const onMessage = (event: MessageEvent) => {
+      const message = event.data;
+      if (
+        event.source !== window ||
+        message?.source !== 'ml-afiliados-extension' ||
+        message?.type !== responseType ||
+        message?.requestId !== requestId
+      ) return;
+      cleanup();
+      resolve(message);
+    };
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error(`Extensão não encontrada. Instale ou atualize para a versão ${REQUIRED_EXTENSION_VERSION}.`));
+    }, timeoutMs);
+    window.addEventListener('message', onMessage);
+    window.postMessage({
+      source: 'ml-afiliados-pro',
+      type: requestType,
+      requestId,
+      ...payload
+    }, window.location.origin);
+  });
+
+  const getPublicationSelection = () => products.filter((product) => !!product.selected);
+
+  const validatePublicationSelection = (items: Product[]) => {
+    const invalid = items.filter((product) => {
+      const price = parseCurrencyValue(product.price);
+      return !product.title?.trim() || !product.link?.trim() || price === null || price <= 0;
+    });
+    const missingImage = items.filter((product) => !/^https:\/\//i.test(product.image || ''));
+    return { invalid, missingImage };
+  };
+
+  const openPublicationReview = () => {
+    const items = getPublicationSelection();
+    if (!items.length) {
+      toast.error('Marque pelo menos um produto na fila.');
+      return;
+    }
+    const { invalid } = validatePublicationSelection(items);
+    if (invalid.length) {
+      toast.error(`Corrija título, preço e link de ${invalid.length} produto(s) antes de publicar.`);
+      return;
+    }
+    setIsReviewOpen(true);
+  };
+
+  const confirmPublication = async () => {
+    const selectedItems = getPublicationSelection();
+    const { invalid } = validatePublicationSelection(selectedItems);
+    if (!selectedItems.length || invalid.length) {
+      setIsReviewOpen(false);
+      toast.error('A fila mudou. Revise os produtos novamente.');
+      return;
+    }
+
+    setIsQueueSending(true);
+    try {
+      const response = await requestExtensionBridge('ML_QUEUE_TO_EXTENSION', 'ML_EXTENSION_ACK', {
+        delaySeconds: globalSettings.autoPostInterval || 30,
+        items: selectedItems.map((product) => {
+          const marketplace = resolveProductMarketplace(product);
+          return {
+            id: product.id,
+            title: product.title,
+            marketplace: marketplace.name,
+            price: formatCurrency(product.price),
+            link: product.link,
+            image: product.image || '',
+            text: formatText(product)
+          };
+        })
+      }, 9000);
+      if (!response.ok) throw new Error(response.error || 'A extensão recusou a fila.');
+      setIsReviewOpen(false);
+      toast.success(`${response.count} oferta(s) conferidas e enviadas para a extensão. Agora escolha o grupo no WhatsApp.`, { duration: 6000 });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível enviar a fila.');
+    } finally {
+      setIsQueueSending(false);
+    }
+  };
+
+  const runDiagnostics = async () => {
+    setIsDiagnosticOpen(true);
+    setIsDiagnosticLoading(true);
+    const selectedItems = getPublicationSelection();
+    const { invalid, missingImage } = validatePublicationSelection(selectedItems);
+    try {
+      const response = await requestExtensionBridge('ML_DIAGNOSTIC_REQUEST', 'ML_DIAGNOSTIC_ACK', {}, 7000);
+      setDiagnostic({
+        ...response,
+        selectedCount: selectedItems.length,
+        invalidSelectionCount: invalid.length,
+        missingImageCount: missingImage.length
+      });
+    } catch (error) {
+      setDiagnostic({
+        ok: false,
+        selectedCount: selectedItems.length,
+        invalidSelectionCount: invalid.length,
+        missingImageCount: missingImage.length,
+        error: error instanceof Error ? error.message : 'Não foi possível executar o diagnóstico.'
+      });
+    } finally {
+      setIsDiagnosticLoading(false);
+    }
+  };
+
+  const loadDeliveryHistory = async () => {
+    setIsHistoryOpen(true);
+    setIsHistoryLoading(true);
+    try {
+      const response = await requestExtensionBridge('ML_HISTORY_REQUEST', 'ML_HISTORY_ACK', {}, 7000);
+      if (!response.ok) throw new Error(response.error || 'A extensão não retornou o histórico.');
+      setDeliveryHistory(Array.isArray(response.entries) ? response.entries : []);
+    } catch (error) {
+      setDeliveryHistory([]);
+      toast.error(error instanceof Error ? error.message : 'Não foi possível carregar o histórico.');
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+
+  const clearDeliveryHistory = async () => {
+    if (!window.confirm('Apagar o histórico e liberar anúncios protegidos? Eles poderão ser enviados novamente.')) return;
+    setIsHistoryLoading(true);
+    try {
+      const response = await requestExtensionBridge('ML_HISTORY_CLEAR', 'ML_HISTORY_CLEAR_ACK', {}, 7000);
+      if (!response.ok) throw new Error(response.error || 'Não foi possível apagar o histórico.');
+      setDeliveryHistory([]);
+      toast.success('Histórico apagado e anúncios liberados.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Não foi possível apagar o histórico.');
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
 
   const handleBulkImport = async (inputOverride?: string) => {
     const rawInput = inputOverride ?? bulkInput;
@@ -1299,6 +1501,224 @@ export default function App() {
   return (
     <div className="app-shell flex min-h-screen flex-col bg-slate-100 font-sans text-slate-800 selection:bg-amber-300 selection:text-slate-950 lg:h-screen lg:overflow-hidden">
       <Toaster position="top-center" />
+
+      {/* Publication Review Modal */}
+      <AnimatePresence>
+        {isReviewOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.96, y: 16 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.96, y: 16 }}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="publication-review-title"
+              className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-950 p-5 text-white sm:p-6">
+                <div className="flex gap-3">
+                  <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-2xl bg-amber-400 text-slate-950"><ListChecks size={23} /></div>
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-widest text-amber-300">Revisão obrigatória</p>
+                    <h2 id="publication-review-title" className="mt-1 text-xl font-black sm:text-2xl">Confira antes de publicar</h2>
+                    <p className="mt-1 text-sm font-medium text-slate-300">A extensão receberá exatamente os anúncios mostrados abaixo.</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => !isQueueSending && setIsReviewOpen(false)} className="rounded-xl p-2 text-slate-300 hover:bg-white/10 hover:text-white"><X size={23} /></button>
+              </div>
+
+              <div className="grid gap-3 border-b border-slate-200 bg-slate-50 p-4 sm:grid-cols-3 sm:p-5">
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs font-bold text-slate-500">Produtos</p>
+                  <p className="mt-1 text-2xl font-black text-slate-950">{getPublicationSelection().length}</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <p className="text-xs font-bold text-slate-500">Intervalo entre envios</p>
+                  <p className="mt-1 text-2xl font-black text-slate-950">{globalSettings.autoPostInterval || 30}s</p>
+                </div>
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="text-xs font-bold text-emerald-700">Proteção antirrepetição</p>
+                  <p className="mt-1 flex items-center gap-2 text-sm font-black text-emerald-900"><ShieldCheck size={20} /> Ativada</p>
+                </div>
+              </div>
+
+              <div className="flex-1 space-y-3 overflow-y-auto p-4 custom-scrollbar sm:p-5">
+                {getPublicationSelection().map((product, index) => {
+                  const marketplace = resolveProductMarketplace(product);
+                  const hasImage = /^https:\/\//i.test(product.image || '');
+                  const affiliate = isAffiliateLink(product.link, marketplace.id);
+                  return (
+                    <article key={product.id} className="grid grid-cols-[72px_1fr] gap-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:grid-cols-[88px_1fr_auto] sm:items-center">
+                      <div className="flex h-[72px] w-[72px] items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 sm:h-[88px] sm:w-[88px]">
+                        {hasImage ? <img src={product.image} alt="" className="h-full w-full object-contain" /> : <ImageIcon className="text-slate-300" size={28} />}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="mb-1 flex flex-wrap items-center gap-2">
+                          <span className="rounded-full bg-slate-950 px-2 py-1 text-[9px] font-black uppercase text-white">{marketplace.name}</span>
+                          <span className={cn("rounded-full px-2 py-1 text-[9px] font-black uppercase", affiliate ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800")}>{affiliate ? 'Link afiliado' : 'Conferir link'}</span>
+                        </div>
+                        <h3 className="line-clamp-2 text-sm font-black leading-snug text-slate-900">{index + 1}. {product.title}</h3>
+                        <p className="mt-2 text-base font-black text-emerald-700">{formatCurrency(product.price)}</p>
+                        {!hasImage && <p className="mt-1 flex items-center gap-1 text-xs font-bold text-amber-700"><AlertTriangle size={13} /> Sem imagem: será tentado envio em texto.</p>}
+                      </div>
+                      <a href={product.link} target="_blank" rel="noreferrer" className="col-span-2 flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 sm:col-span-1"><ExternalLink size={14} /> Abrir oferta</a>
+                    </article>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 border-t border-slate-200 bg-white p-4 sm:flex-row sm:justify-end sm:p-5">
+                <button type="button" onClick={() => setIsReviewOpen(false)} disabled={isQueueSending} className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Voltar e corrigir</button>
+                <button type="button" onClick={confirmPublication} disabled={isQueueSending} className="flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-black text-white shadow-lg shadow-emerald-200 hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60">
+                  {isQueueSending ? <RefreshCw size={18} className="animate-spin" /> : <Send size={18} />}
+                  {isQueueSending ? 'Enviando fila...' : 'Confirmar e abrir WhatsApp'}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Diagnostics Modal */}
+      <AnimatePresence>
+        {isDiagnosticOpen && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+            <motion.div initial={{ scale: 0.96, y: 16 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96, y: 16 }} role="dialog" aria-modal="true" aria-labelledby="diagnostic-title" className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl border border-slate-200 bg-white shadow-2xl custom-scrollbar">
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5 sm:p-6">
+                <div className="flex gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600 text-white"><Activity size={23} /></div>
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-widest text-blue-600">Central de diagnóstico</p>
+                    <h2 id="diagnostic-title" className="mt-1 text-2xl font-black text-slate-950">Saúde do sistema</h2>
+                    <p className="mt-1 text-sm font-medium text-slate-500">Teste aplicativo, extensão, WhatsApp e fila.</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setIsDiagnosticOpen(false)} className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-900"><X size={23} /></button>
+              </div>
+
+              <div className="space-y-4 p-5 sm:p-6">
+                {isDiagnosticLoading ? (
+                  <div className="flex min-h-56 flex-col items-center justify-center gap-4 text-center">
+                    <RefreshCw className="animate-spin text-blue-600" size={36} />
+                    <p className="font-bold text-slate-600">Executando testes...</p>
+                  </div>
+                ) : (
+                  <>
+                    {[
+                      { label: 'Aplicativo e login', ok: Boolean(user), detail: user?.email || 'Usuário não conectado', icon: Wifi },
+                      { label: 'Extensão do Chrome', ok: diagnostic?.ok && diagnostic?.version === REQUIRED_EXTENSION_VERSION, detail: diagnostic?.version ? `Versão ${diagnostic.version}${diagnostic.version === REQUIRED_EXTENSION_VERSION ? ' atualizada' : ` — atualize para ${REQUIRED_EXTENSION_VERSION}`}` : (diagnostic?.error || 'Extensão não encontrada'), icon: ShieldCheck },
+                      { label: 'WhatsApp Web', ok: Boolean(diagnostic?.whatsAppOpen), detail: diagnostic?.whatsAppOpen ? 'Aba do WhatsApp Web aberta' : 'Abra e conecte o WhatsApp Web', icon: Smartphone },
+                      { label: 'Produtos selecionados', ok: Boolean(diagnostic?.selectedCount) && diagnostic?.invalidSelectionCount === 0, detail: diagnostic?.selectedCount ? `${diagnostic.selectedCount} selecionado(s); ${diagnostic.invalidSelectionCount} inválido(s)` : 'Nenhum produto selecionado', icon: Package },
+                      { label: 'Imagens da fila', ok: diagnostic?.missingImageCount === 0, detail: diagnostic?.missingImageCount ? `${diagnostic.missingImageCount} produto(s) sem imagem válida` : 'Imagens válidas nos produtos selecionados', icon: ImageIcon },
+                    ].map((check) => {
+                      const Icon = check.icon;
+                      return (
+                        <div key={check.label} className={cn("flex items-start gap-3 rounded-2xl border p-4", check.ok ? "border-emerald-200 bg-emerald-50" : "border-amber-200 bg-amber-50")}>
+                          <div className={cn("mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl", check.ok ? "bg-emerald-600 text-white" : "bg-amber-400 text-slate-950")}>{check.ok ? <Check size={19} /> : <Icon size={19} />}</div>
+                          <div>
+                            <p className={cn("text-sm font-black", check.ok ? "text-emerald-950" : "text-amber-950")}>{check.label}</p>
+                            <p className={cn("mt-1 text-xs font-semibold", check.ok ? "text-emerald-700" : "text-amber-700")}>{check.detail}</p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-2xl bg-slate-100 p-4"><p className="text-xs font-bold text-slate-500">Fila na extensão</p><p className="mt-1 text-xl font-black text-slate-950">{diagnostic?.queueIndex || 0}/{diagnostic?.queueCount || 0}</p></div>
+                      <div className="rounded-2xl bg-slate-100 p-4"><p className="text-xs font-bold text-slate-500">Histórico</p><p className="mt-1 text-xl font-black text-slate-950">{diagnostic?.historyCount || 0}</p></div>
+                      <div className="rounded-2xl bg-slate-100 p-4"><p className="text-xs font-bold text-slate-500">Protegidos</p><p className="mt-1 text-xl font-black text-slate-950">{diagnostic?.protectedCount || 0}</p></div>
+                    </div>
+                    {(diagnostic?.lastError || diagnostic?.lastStatus) && (
+                      <div className={cn("rounded-2xl border p-4", diagnostic.lastError ? "border-red-200 bg-red-50" : "border-blue-200 bg-blue-50")}>
+                        <p className={cn("text-xs font-black uppercase tracking-wide", diagnostic.lastError ? "text-red-700" : "text-blue-700")}>{diagnostic.lastError ? 'Último erro' : 'Último estado da extensão'}</p>
+                        <p className={cn("mt-2 text-sm font-semibold", diagnostic.lastError ? "text-red-900" : "text-blue-900")}>{diagnostic.lastError || diagnostic.lastStatus}</p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="flex justify-end border-t border-slate-200 p-5">
+                <button type="button" onClick={runDiagnostics} disabled={isDiagnosticLoading} className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-black text-white hover:bg-blue-700 disabled:opacity-60"><RefreshCw size={17} className={isDiagnosticLoading ? 'animate-spin' : ''} /> Executar novamente</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delivery History Modal */}
+      <AnimatePresence>
+        {isHistoryOpen && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+            <motion.div initial={{ scale: 0.96, y: 16 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.96, y: 16 }} role="dialog" aria-modal="true" aria-labelledby="history-title" className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 p-5 sm:p-6">
+                <div className="flex gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-violet-600 text-white"><History size={23} /></div>
+                  <div>
+                    <p className="text-xs font-black uppercase tracking-widest text-violet-600">Histórico de envios</p>
+                    <h2 id="history-title" className="mt-1 text-2xl font-black text-slate-950">Publicações da extensão</h2>
+                    <p className="mt-1 text-sm font-medium text-slate-500">Registros locais dos últimos 30 dias.</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setIsHistoryOpen(false)} className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-900"><X size={23} /></button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 custom-scrollbar sm:p-5">
+                {isHistoryLoading ? (
+                  <div className="flex min-h-60 items-center justify-center"><RefreshCw className="animate-spin text-violet-600" size={34} /></div>
+                ) : deliveryHistory.length ? (
+                  <div className="space-y-3">
+                    {deliveryHistory.map((entry) => {
+                      const statusConfig = {
+                        sent: { label: 'Enviado', classes: 'bg-emerald-100 text-emerald-800' },
+                        blocked: { label: 'Duplicado bloqueado', classes: 'bg-blue-100 text-blue-800' },
+                        failed: { label: 'Falhou', classes: 'bg-red-100 text-red-800' },
+                        uncertain: { label: 'Conferir no WhatsApp', classes: 'bg-amber-100 text-amber-800' }
+                      }[entry.status] || { label: entry.status, classes: 'bg-slate-100 text-slate-700' };
+                      return (
+                        <article key={entry.id} className="grid grid-cols-[56px_1fr] gap-3 rounded-2xl border border-slate-200 p-3 sm:grid-cols-[64px_1fr_auto] sm:items-center sm:p-4">
+                          <div className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 sm:h-16 sm:w-16">
+                            {entry.image ? <img src={entry.image} alt="" className="h-full w-full object-contain" /> : <Package className="text-slate-300" size={24} />}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={cn("rounded-full px-2 py-1 text-[9px] font-black uppercase", statusConfig.classes)}>{statusConfig.label}</span>
+                              {entry.marketplace && <span className="rounded-full bg-slate-100 px-2 py-1 text-[9px] font-black uppercase text-slate-600">{entry.marketplace}</span>}
+                              {entry.mode && <span className="text-[10px] font-bold text-slate-500">{entry.mode === 'image' ? 'Foto + texto' : 'Somente texto'}</span>}
+                            </div>
+                            <h3 className="mt-2 line-clamp-2 text-sm font-black text-slate-900">{entry.title || 'Anúncio sem título registrado'}</h3>
+                            <p className="mt-1 flex items-center gap-1 text-xs font-semibold text-slate-500"><Clock3 size={12} /> {new Date(entry.timestamp).toLocaleString('pt-BR')}</p>
+                            {entry.detail && <p className="mt-1 line-clamp-2 text-xs font-medium text-slate-600">{entry.detail}</p>}
+                          </div>
+                          <div className="col-span-2 flex items-center gap-2 sm:col-span-1">
+                            {entry.price && <span className="text-sm font-black text-emerald-700">{entry.price}</span>}
+                            {entry.link && <a href={entry.link} target="_blank" rel="noreferrer" className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50" title="Abrir produto"><ExternalLink size={16} /></a>}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="flex min-h-60 flex-col items-center justify-center text-center">
+                    <History className="text-slate-300" size={44} />
+                    <h3 className="mt-4 text-lg font-black text-slate-900">Nenhum envio registrado</h3>
+                    <p className="mt-2 max-w-sm text-sm font-medium text-slate-500">Depois que a extensão publicar ou bloquear um anúncio, ele aparecerá aqui.</p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col-reverse gap-3 border-t border-slate-200 p-4 sm:flex-row sm:justify-between sm:p-5">
+                <button type="button" onClick={clearDeliveryHistory} disabled={isHistoryLoading || !deliveryHistory.length} className="rounded-xl border border-red-200 px-4 py-3 text-sm font-bold text-red-700 hover:bg-red-50 disabled:opacity-40"><Trash2 size={16} className="mr-2 inline" /> Limpar histórico</button>
+                <button type="button" onClick={loadDeliveryHistory} disabled={isHistoryLoading} className="flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-3 text-sm font-black text-white hover:bg-violet-700 disabled:opacity-60"><RefreshCw size={17} className={isHistoryLoading ? 'animate-spin' : ''} /> Atualizar histórico</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Settings Modal */}
       <AnimatePresence>
         {isSettingsOpen && (
@@ -1641,6 +2061,24 @@ export default function App() {
               <Smartphone size={17} /> Instalar app
             </button>
           )}
+          <button
+            type="button"
+            onClick={runDiagnostics}
+            aria-label="Abrir central de diagnóstico"
+            title="Diagnóstico"
+            className="flex items-center gap-2 rounded-xl border border-blue-500/40 bg-blue-500/10 p-2.5 text-sm font-bold text-blue-200 transition-all hover:bg-blue-500/20 sm:px-4"
+          >
+            <Activity size={18} /> <span className="hidden xl:inline">Diagnóstico</span>
+          </button>
+          <button
+            type="button"
+            onClick={loadDeliveryHistory}
+            aria-label="Abrir histórico de envios"
+            title="Histórico"
+            className="flex items-center gap-2 rounded-xl border border-violet-500/40 bg-violet-500/10 p-2.5 text-sm font-bold text-violet-200 transition-all hover:bg-violet-500/20 sm:px-4"
+          >
+            <History size={18} /> <span className="hidden xl:inline">Histórico</span>
+          </button>
           <button 
             onClick={() => setIsSettingsOpen(true)}
             aria-label="Abrir configurações"
@@ -1761,7 +2199,7 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-black uppercase tracking-wider text-emerald-900">Extensão ML Afiliados Sender</p>
-                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.8 para Google Chrome</p>
+                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.9 para Google Chrome</p>
                 </div>
                 <button
                   type="button"
@@ -1783,7 +2221,7 @@ export default function App() {
                   <li>Ative o <b>Modo do desenvolvedor</b> no canto superior direito.</li>
                   <li>Clique em <b>Carregar sem compactação</b>.</li>
                   <li>Selecione a pasta extraída que contém o arquivo <b>manifest.json</b>.</li>
-                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.6</b> e deixe a extensão ativada.</li>
+                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.9</b> e deixe a extensão ativada.</li>
                   <li>Fixe a extensão no ícone de quebra-cabeça do Chrome e abra o WhatsApp Web.</li>
                 </ol>
                 <p className="mt-3 rounded-lg bg-amber-50 p-2 text-[9px] font-bold text-amber-800">
@@ -1840,42 +2278,7 @@ export default function App() {
                   <button
                     type="button"
                     draggable={false}
-                    onClick={() => {
-                      const selectedItems = products.filter(p => !!p.selected);
-                      if (selectedItems.length === 0) {
-                        toast.error('MARQUE OS PRODUTOS NA FILA PRIMEIRO!');
-                        return;
-                      }
-                      const incompleteProducts = selectedItems.filter((product) => {
-                        const price = parseCurrencyValue(product.price);
-                        return price === null || price <= 0;
-                      });
-                      if (incompleteProducts.length > 0) {
-                        toast.error(`Preencha o preço de ${incompleteProducts.length} produto(s) antes de enviar.`);
-                        return;
-                      }
-                      const requestId = `ml-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                      const timeout = window.setTimeout(() => {
-                        window.removeEventListener('message', onExtensionAck);
-                        toast.error('Extensão não encontrada. Instale ou ative a ML Afiliados Sender.');
-                      }, 6000);
-                      function onExtensionAck(event: MessageEvent) {
-                        const message = event.data;
-                        if (event.source !== window || message?.source !== 'ml-afiliados-extension' || message?.type !== 'ML_EXTENSION_ACK' || message?.requestId !== requestId) return;
-                        window.clearTimeout(timeout);
-                        window.removeEventListener('message', onExtensionAck);
-                        if (message.ok) toast.success(`${message.count} oferta(s) enviadas para a extensão. Escolha o grupo no WhatsApp.`);
-                        else toast.error(message.error || 'A extensão recusou a fila.');
-                      }
-                      window.addEventListener('message', onExtensionAck);
-                      window.postMessage({
-                        source: 'ml-afiliados-pro',
-                        type: 'ML_QUEUE_TO_EXTENSION',
-                        requestId,
-                        delaySeconds: globalSettings.autoPostInterval || 30,
-                        items: selectedItems.map(p => ({ image: p.image || '', text: formatText(p) }))
-                      }, window.location.origin);
-                    }}
+                    onClick={openPublicationReview}
                     onDragStart={(e) => {
                       const selectedItems = products.filter(p => !!p.selected);
                       if (selectedItems.length === 0) {
@@ -1915,7 +2318,7 @@ export default function App() {
                     )}
                   >
                     <Zap size={14} className="text-white fill-emerald-200" />
-                    <span>2. ENVIAR {selectedCount > 0 ? `${selectedCount} SELECIONADO${selectedCount === 1 ? '' : 'S'}` : 'SELECIONADOS'} PARA EXTENSÃO</span>
+                    <span>2. REVISAR E ENVIAR {selectedCount > 0 ? `${selectedCount} SELECIONADO${selectedCount === 1 ? '' : 'S'}` : 'SELECIONADOS'}</span>
                   </button>
                 </div>
 
