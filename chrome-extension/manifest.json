@@ -1,9 +1,13 @@
 {
   "manifest_version": 3,
   "name": "ML Afiliados Sender",
-  "version": "1.0.6",
-  "description": "Recebe a fila do ML Afiliados Pro e envia imagens com legendas no WhatsApp Web.",
-  "permissions": ["storage", "tabs"],
+  "version": "1.0.10",
+  "description": "Recebe a fila do Afiliados Pro, valida preços e envia anúncios com proteção contra duplicidade no WhatsApp Web.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting"
+  ],
   "host_permissions": [
     "https://ml-afiliados-pro.vercel.app/*",
     "https://filiados-phi.vercel.app/*",
@@ -11,23 +15,45 @@
     "http://127.0.0.1/*",
     "https://web.whatsapp.com/*",
     "https://http2.mlstatic.com/*",
-    "https://*.mlstatic.com/*"
+    "https://*.mlstatic.com/*",
+    "https://shopee.com.br/*",
+    "https://*.shopee.com.br/*",
+    "https://*.susercontent.com/*",
+    "https://*.media-amazon.com/*",
+    "https://*.ssl-images-amazon.com/*",
+    "https://*.images-amazon.com/*",
+    "https://*.alicdn.com/*",
+    "https://*.aliexpress-media.com/*"
   ],
-  "background": { "service_worker": "background.js" },
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
     "default_title": "ML Afiliados Sender",
     "default_popup": "popup.html"
   },
   "content_scripts": [
     {
-      "matches": ["https://ml-afiliados-pro.vercel.app/*", "https://filiados-phi.vercel.app/*", "http://localhost/*", "http://127.0.0.1/*"],
-      "js": ["bridge.js"],
+      "matches": [
+        "https://ml-afiliados-pro.vercel.app/*",
+        "https://filiados-phi.vercel.app/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "bridge.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://web.whatsapp.com/*"],
-      "js": ["whatsapp.js"],
+      "matches": [
+        "https://web.whatsapp.com/*"
+      ],
+      "js": [
+        "whatsapp.js"
+      ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "minimum_chrome_version": "121"
 }

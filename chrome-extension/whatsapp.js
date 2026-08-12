@@ -5,6 +5,132 @@
   let stopped = false;
   let running = false;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const SEND_GUARD_TYPES = {
+    CHECK: 'ML_SEND_GUARD_CHECK',
+    RESERVE: 'ML_SEND_GUARD_RESERVE',
+    COMMIT: 'ML_SEND_GUARD_COMMIT'
+  };
+
+  function normalizeFingerprintPart(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+
+  function canonicalProductIdentity(item) {
+    const marketplace = normalizeFingerprintPart(item?.marketplace || 'unknown');
+    try {
+      const url = new URL(String(item?.link || ''));
+      const host = url.hostname.toLowerCase();
+      const path = decodeURIComponent(url.pathname).replace(/\/+$/, '');
+
+      const mercadoLivre = path.match(/\b(MLB-?\d{6,})\b/i);
+      const amazon = path.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:\/|$)/i);
+      const aliExpress = path.match(/\/item\/(\d+)\.html/i);
+      const shopee = path.match(/\/(?:product|opaanlp)\/(\d+)\/(\d+)(?:\/|$)/i)
+        || path.match(/(?:^|[-/])i\.(\d+)\.(\d+)(?:\/|$)/i);
+
+      if (mercadoLivre) return `mercado-livre:${mercadoLivre[1].replace('-', '').toUpperCase()}`;
+      if (amazon) return `amazon:${amazon[1].toUpperCase()}`;
+      if (aliExpress) return `aliexpress:${aliExpress[1]}`;
+      if (shopee) return `shopee:${shopee[1]}:${shopee[2]}`;
+
+      const keep = new URLSearchParams();
+      for (const key of ['item_id', 'itemid', 'shop_id', 'shopid']) {
+        if (url.searchParams.has(key)) keep.set(key, url.searchParams.get(key));
+      }
+      return `${marketplace}:${host}${path}${keep.size ? `?${keep}` : ''}`;
+    } catch {
+      return '';
+    }
+  }
+
+  function fingerprintItem(item) {
+    const identity = canonicalProductIdentity(item);
+    const image = normalizeFingerprintPart(item?.image).replace(/[?#].*$/, '');
+    const title = normalizeFingerprintPart(item?.title);
+    const source = identity || `${image}\n${title}`;
+    let first = 0x811c9dc5;
+    let second = 0x9e3779b9;
+    for (let index = 0; index < source.length; index++) {
+      const code = source.charCodeAt(index);
+      first ^= code;
+      first = Math.imul(first, 0x01000193);
+      second ^= code + index;
+      second = Math.imul(second, 0x85ebca6b);
+    }
+    return `v3-${(first >>> 0).toString(16).padStart(8, '0')}-${(second >>> 0).toString(16).padStart(8, '0')}-${source.length}`;
+  }
+
+  async function sendGuard(type, payload) {
+    const result = await chrome.runtime.sendMessage({ type, ...payload });
+    if (result?.ok) return result;
+    const error = new Error(result?.error || 'A trava contra duplicação não respondeu.');
+    error.duplicateBlocked = Boolean(result?.duplicate);
+    error.guardBusy = Boolean(result?.busy);
+    error.guardReason = result?.reason || '';
+    throw error;
+  }
+
+  async function logDelivery(status, item, payload, detail = '', mode = '') {
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'ML_DELIVERY_LOG',
+        status,
+        fingerprint: payload.fingerprint,
+        queueId: payload.queueId,
+        title: item?.title || '',
+        marketplace: item?.marketplace || '',
+        price: item?.price || '',
+        link: item?.link || '',
+        image: item?.image || '',
+        detail,
+        mode
+      });
+    } catch {}
+  }
+
+  function outgoingMessageCount() {
+    return document.querySelectorAll('#main [data-id^="true_"], #main [data-id*="true_"]').length;
+  }
+
+  async function waitForSendConfirmation(previousCount, previewRoot) {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (outgoingMessageCount() > previousCount) return true;
+      if (previewRoot && !document.contains(previewRoot)) {
+        await sleep(500);
+        if (outgoingMessageCount() > previousCount) return true;
+      }
+      await sleep(200);
+    }
+    return false;
+  }
+
+  async function clickWithProtection(button, payload) {
+    await sendGuard(SEND_GUARD_TYPES.RESERVE, payload);
+    const previousCount = outgoingMessageCount();
+    const previewRoot = button.closest?.('[role="dialog"]') || null;
+    try {
+      button.click();
+    } catch (error) {
+      const uncertain = new Error(`O clique de envio ficou sem confirmação: ${error?.message || error}`);
+      uncertain.sendWasClicked = true;
+      throw uncertain;
+    }
+
+    const confirmed = await waitForSendConfirmation(previousCount, previewRoot);
+    if (!confirmed) {
+      const uncertain = new Error('O WhatsApp não confirmou visualmente a nova mensagem. Confira a conversa; não haverá repetição automática.');
+      uncertain.sendWasClicked = true;
+      throw uncertain;
+    }
+
+    try {
+      await sendGuard(SEND_GUARD_TYPES.COMMIT, payload);
+    } catch (error) {
+      const uncertain = new Error(`O anúncio foi confirmado na conversa, mas o registro final falhou: ${error?.message || error}`);
+      uncertain.sendWasClicked = true;
+      throw uncertain;
+    }
+  }
 
   function createPanel() {
     let panel = document.getElementById('ml-afiliados-extension-panel');
@@ -65,14 +191,14 @@
     element.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: transfer }));
   }
 
-  async function sendText(text) {
+  async function sendText(text, guardPayload) {
     const input = composer();
     if (!input) throw new Error('Campo de mensagem não encontrado.');
     pasteText(input, text);
     await sleep(900);
     const button = sendButton(document);
-    if (button) button.click();
-    else input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+    if (!button) throw new Error('Botão de enviar texto não encontrado.');
+    await clickWithProtection(button, { ...guardPayload, mode: 'text' });
     await sleep(1800);
   }
 
@@ -148,7 +274,7 @@
     return waitForPreview();
   }
 
-  async function attachAndSend(item) {
+  async function attachAndSend(item, guardPayload) {
     const file = await downloadImage(item.image);
     const preview = await openImagePreview(file);
     if (!preview) throw new Error('A prévia da imagem não abriu.');
@@ -156,7 +282,7 @@
     await sleep(900);
     const button = sendButton(preview.dialog || document) || preview.button;
     if (!button) throw new Error('Botão de enviar imagem não encontrado.');
-    button.click();
+    await clickWithProtection(button, { ...guardPayload, mode: 'image' });
     await sleep(2200);
   }
 
@@ -171,13 +297,14 @@
     start.style.opacity = '.55';
     let photoSentCount = 0;
     let textFallbackCount = 0;
+    let protectedCount = 0;
 
     try {
-      const state = await chrome.storage.local.get(['mlQueue', 'mlDelaySeconds', 'mlQueueIndex']);
+      const state = await chrome.storage.local.get(['mlQueue', 'mlDelaySeconds', 'mlQueueIndex', 'mlQueueCreatedAt']);
       const rawQueue = Array.isArray(state.mlQueue) ? state.mlQueue : [];
       const seenItems = new Set();
       const queue = rawQueue.filter((item) => {
-        const key = `${String(item?.image || '').trim()}\n${String(item?.text || '').trim()}`;
+        const key = fingerprintItem(item);
         if (!String(item?.text || '').trim() || seenItems.has(key)) return false;
         seenItems.add(key);
         return true;
@@ -190,32 +317,108 @@
       }
 
       const delay = Math.max(5, Math.min(300, Number(state.mlDelaySeconds) || 30));
+      const queueId = String(state.mlQueueCreatedAt || Date.now());
+      await chrome.storage.local.set({ mlRunState: { status: 'running', queueId, startedAt: Date.now() } });
       let index = Math.max(0, Math.min(queue.length, Number(state.mlQueueIndex) || 0));
       if (!queue.length) {
         setStatus('A fila está vazia. Volte ao ML Afiliados Pro e envie novamente.', true);
         return;
       }
 
+      const advance = async (nextIndex) => {
+        const current = await chrome.storage.local.get(['mlQueueCreatedAt', 'mlRunState']);
+        if (String(current.mlQueueCreatedAt || '') !== queueId || current.mlRunState?.queueId !== queueId) {
+          throw new Error('A fila mudou durante o envio. Execução pausada para evitar duplicação.');
+        }
+        await chrome.storage.local.set({ mlQueueIndex: nextIndex });
+        setProgress(nextIndex, queue.length);
+      };
+
       for (; index < queue.length && !stopped; index++) {
         const label = `[${index + 1}/${queue.length}]`;
+        const fingerprint = fingerprintItem(queue[index]);
+        const guardPayload = {
+          fingerprint,
+          queueId,
+          index,
+          label,
+          title: queue[index]?.title || '',
+          marketplace: queue[index]?.marketplace || '',
+          price: queue[index]?.price || '',
+          link: queue[index]?.link || '',
+          image: queue[index]?.image || ''
+        };
+
+        const protection = await sendGuard(SEND_GUARD_TYPES.CHECK, guardPayload);
+        if (protection.protected) {
+          if (protection.reason === 'busy') {
+            setStatus(`${label} Outro envio está em confirmação. A fila foi pausada para não duplicar anúncios.`, true);
+            stopped = true;
+            break;
+          }
+          protectedCount++;
+          await advance(index + 1);
+          await logDelivery('blocked', queue[index], guardPayload, 'Anúncio já enviado ou em confirmação.');
+          setStatus(`${label} Ignorado pela trava: este anúncio já foi enviado ou ficou em confirmação.`);
+          continue;
+        }
+
         try {
           setStatus(`${label} Baixando e anexando foto...`);
-          await attachAndSend(queue[index]);
+          await attachAndSend(queue[index], guardPayload);
           photoSentCount++;
-          await chrome.storage.local.set({ mlQueueIndex: index + 1 });
-          setProgress(index + 1, queue.length);
-          setStatus(`${label} Enviado com foto.`);
+          await advance(index + 1);
+          await logDelivery('sent', queue[index], guardPayload, 'Enviado com foto.', 'image');
+          setStatus(`${label} Enviado com foto e registrado pela trava.`);
         } catch (error) {
+          if (error?.guardBusy) {
+            setStatus(`${label} Outro envio está em confirmação. A fila foi pausada para evitar duplicação.`, true);
+            stopped = true;
+            break;
+          }
+          if (error?.duplicateBlocked) {
+            protectedCount++;
+            await advance(index + 1);
+            await logDelivery('blocked', queue[index], guardPayload, 'Duplicação bloqueada antes do clique.');
+            setStatus(`${label} Envio duplicado bloqueado com segurança.`);
+            continue;
+          }
+          if (error?.sendWasClicked) {
+            await logDelivery('uncertain', queue[index], guardPayload, error?.message || String(error), 'image');
+            setStatus(`${label} ENVIO BLOQUEADO PARA CONFERÊNCIA: ${error?.message || error}. A extensão não repetirá este anúncio.`, true);
+            stopped = true;
+            break;
+          }
+
           const imageError = error?.message || String(error);
           try {
-            setStatus(`${label} Foto falhou; enviando anúncio completo em texto...`, true);
-            await sendText(queue[index].text);
+            setStatus(`${label} Foto falhou antes do envio; enviando o anúncio uma única vez em texto...`, true);
+            await sendText(queue[index].text, guardPayload);
             textFallbackCount++;
-            await chrome.storage.local.set({ mlQueueIndex: index + 1, mlLastError: `Foto não enviada: ${imageError}` });
-            setProgress(index + 1, queue.length);
-            setStatus(`${label} Enviado em texto. Foto não enviada: ${imageError}`, true);
+            await advance(index + 1);
+            await logDelivery('sent', queue[index], guardPayload, `Enviado em texto porque a foto falhou: ${imageError}`, 'text');
+            await chrome.storage.local.set({ mlLastError: `Foto não enviada: ${imageError}` });
+            setStatus(`${label} Enviado uma vez em texto e registrado. Foto não enviada: ${imageError}`, true);
           } catch (textError) {
-            setStatus(`${label} NÃO ENVIADO: foto: ${imageError}; texto: ${textError?.message || textError}`, true);
+            if (textError?.guardBusy) {
+              setStatus(`${label} Outro envio está em confirmação. A fila foi pausada para evitar duplicação.`, true);
+              stopped = true;
+              break;
+            }
+            if (textError?.duplicateBlocked) {
+              protectedCount++;
+              await advance(index + 1);
+              await logDelivery('blocked', queue[index], guardPayload, 'Segunda tentativa bloqueada.');
+              setStatus(`${label} Segundo envio bloqueado pela trava.`);
+              continue;
+            }
+            if (textError?.sendWasClicked) {
+              await logDelivery('uncertain', queue[index], guardPayload, textError?.message || String(textError), 'text');
+              setStatus(`${label} ENVIO BLOQUEADO PARA CONFERÊNCIA: ${textError?.message || textError}. Não haverá tentativa automática.`, true);
+            } else {
+              await logDelivery('failed', queue[index], guardPayload, `Foto: ${imageError}; texto: ${textError?.message || textError}`);
+              setStatus(`${label} NÃO ENVIADO: foto: ${imageError}; texto: ${textError?.message || textError}`, true);
+            }
             stopped = true;
             break;
           }
@@ -230,16 +433,19 @@
       }
 
       if (!stopped && index >= queue.length) {
-        const status = textFallbackCount
-          ? `Concluído: ${photoSentCount} com foto e ${textFallbackCount} somente em texto.`
-          : `Concluído: ${photoSentCount} oferta(s) enviada(s) com foto.`;
-        setStatus(status, textFallbackCount > 0);
+        const parts = [
+          photoSentCount ? `${photoSentCount} com foto` : '',
+          textFallbackCount ? `${textFallbackCount} em texto` : '',
+          protectedCount ? `${protectedCount} duplicado(s) bloqueado(s)` : ''
+        ].filter(Boolean);
+        setStatus(`Concluído: ${parts.join(', ') || 'nenhum envio necessário'}.`, textFallbackCount > 0);
         await chrome.storage.local.set({ mlQueueIndex: 0 });
       }
     } catch (error) {
       setStatus(`Falha inesperada: ${error?.message || error}`, true);
     } finally {
       running = false;
+      await chrome.storage.local.set({ mlRunState: { status: 'idle', stoppedAt: Date.now() } }).catch(() => {});
       start.disabled = false;
       start.style.opacity = '1';
     }

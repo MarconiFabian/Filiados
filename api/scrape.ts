@@ -253,13 +253,12 @@ function extractShopee($: CheerioRoot, html: string): ProductData {
   result.currentValue = parsePrice(text($, [
     '[data-testid="pdp-product-price"]',
     '.IZPeQz',
-    '[class*="product-price"]',
-  ])) || result.currentValue || shopeeEmbeddedPrice(html, 'price');
+  ])) || result.currentValue;
   result.originalValue = parsePrice(text($, [
     '[data-testid="pdp-product-price-before-discount"]',
     '.ZA5sW5',
     '[class*="price-before-discount"]',
-  ])) || shopeeEmbeddedPrice(html, 'price_before_discount');
+  ]));
   if (result.originalValue !== null && result.currentValue !== null && result.originalValue <= result.currentValue) {
     result.originalValue = null;
   }
@@ -327,8 +326,8 @@ export function extractShopeeApiProduct(payload: unknown): ProductData | null {
     ? item.models.map(objectValue)
     : [];
   const currentValue = firstShopeeApiPrice([
-    item.price_min,
     item.price,
+    item.price_min,
     ...models.map((model) => model.price),
     item.price_max,
   ]);

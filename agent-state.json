@@ -1,0 +1,457 @@
+{
+  "schemaVersion": 1,
+  "project": {
+    "name": "Afiliados Pro",
+    "repository": "MarconiFabian/Filiados",
+    "version": "3.0.0",
+    "extensionVersion": "1.0.10",
+    "branch": "codex/agentic-quality-iteration-1-20260811",
+    "environment": "quality-iteration",
+    "commitUnderTest": "8ab919a2800d466c49b9c04e1e356a05db9f9004"
+  },
+  "iteration": 1,
+  "status": "IN_PROGRESS",
+  "updatedAt": "2026-08-11T12:00:00-03:00",
+  "marketplaces": [
+    "mercado-livre",
+    "amazon",
+    "aliexpress",
+    "shopee"
+  ],
+  "qualityGate": {
+    "verdict": "REJECTED",
+    "judge": "AGENT_10_INDEPENDENT",
+    "requiredScore": 90,
+    "currentScore": 73,
+    "provisional": false,
+    "openP0": 0,
+    "openP1": 1,
+    "criticalSecurity": 0,
+    "criticalTests": {
+      "passed": 6,
+      "total": 8,
+      "percent": 75,
+      "status": "FAIL"
+    },
+    "criticalFlows": {
+      "passed": 0,
+      "total": 3,
+      "percent": 0,
+      "status": "FAIL"
+    },
+    "criticalRegressions": 0,
+    "gates": {
+      "scoreAtLeast90": "FAIL",
+      "noOpenP0": "PASS",
+      "noCriticalSecurity": "PASS",
+      "allCriticalTests": "FAIL",
+      "allCriticalFlows": "FAIL",
+      "noCriticalRegressions": "PASS"
+    }
+  },
+  "issues": [
+    {
+      "id": "AFF-SHOPEE-001",
+      "category": "AFFILIATE",
+      "title": "Captura da Shopee seleciona frete como preço",
+      "severity": "P0",
+      "component": "Chrome extension",
+      "file": "chrome-extension/background.js",
+      "status": "FIXED_AUTOMATED_PENDING_REAL_E2E",
+      "ownerAgent": "MARKETPLACE_AGENT",
+      "iterationCreated": 1,
+      "rootCause": "Fallback usava Math.min sobre todos os valores próximos ao título.",
+      "fix": "Remover seleção pelo menor valor, rejeitar contexto de frete/envio/entrega/parcelas e ranquear preços visíveis.",
+      "test": "tests/quality.test.ts - regressão de preço/frete",
+      "evidence": "Caso real: produto R$ 33,90 era salvo como frete R$ 9,62; fixture automatizada agora exige produto 33,90 e rejeita frete 9,62."
+    },
+    {
+      "id": "ARCH-001",
+      "category": "ARCHITECTURE",
+      "title": "Código-fonte da extensão divergente do ZIP distribuído",
+      "severity": "P1",
+      "component": "Extension release",
+      "file": "chrome-extension/*",
+      "status": "FIXED_VERIFIED_CI",
+      "ownerAgent": "ARCHITECT_AGENT",
+      "iterationCreated": 1,
+      "rootCause": "ZIP 1.0.9 foi atualizado sem sincronizar a pasta chrome-extension.",
+      "fix": "Sincronizar fontes e pacote na versão 1.0.10 e testar versão interna.",
+      "test": "tests/quality.test.ts - consistência app/fonte/ZIP"
+    },
+    {
+      "id": "QA-001",
+      "category": "QA",
+      "title": "Projeto sem suíte automatizada e sem CI",
+      "severity": "P1",
+      "component": "Quality pipeline",
+      "file": "package.json",
+      "status": "FIXED_VERIFIED_CI",
+      "ownerAgent": "QA_AGENT",
+      "iterationCreated": 1,
+      "fix": "Adicionar node:test e GitHub Actions com tipos, testes, build e audit crítico.",
+      "test": ".github/workflows/quality.yml",
+      "evidence": "Quality Gate run 31545907589: TypeScript, 12/12 testes, build e npm audit crítico PASS."
+    },
+    {
+      "id": "RES-001",
+      "category": "RELIABILITY",
+      "title": "Rate limit em memória não é global em ambiente serverless",
+      "severity": "P2",
+      "component": "API",
+      "file": "lib/apiAuth.ts",
+      "status": "OPEN",
+      "ownerAgent": "PERFORMANCE_AGENT",
+      "iterationCreated": 1,
+      "impact": "Instâncias diferentes podem permitir mais requisições que o limite nominal."
+    },
+    {
+      "id": "SEC-001",
+      "category": "SECURITY",
+      "title": "CSP permite unsafe-eval e fontes HTTPS amplas",
+      "severity": "P2",
+      "component": "Headers",
+      "file": "vercel.json",
+      "status": "FIXED_VERIFIED_CI",
+      "ownerAgent": "SECURITY_AGENT",
+      "iterationCreated": 1,
+      "impact": "Reduz a proteção contra execução de script injetado.",
+      "fix": "Remover unsafe-eval e restringir origens de scripts, conexões e frames.",
+      "test": "tests/quality.test.ts - CSP não contém unsafe-eval",
+      "evidence": "Quality Gate run 31545907589 PASS."
+    },
+    {
+      "id": "ARCH-002",
+      "category": "ARCHITECTURE",
+      "title": "App.tsx concentra interface, autenticação, dados e integrações",
+      "severity": "P2",
+      "component": "Frontend",
+      "file": "src/App.tsx",
+      "status": "OPEN",
+      "ownerAgent": "ARCHITECT_AGENT",
+      "iterationCreated": 1,
+      "impact": "Aumenta risco de regressão e dificulta testes unitários."
+    },
+    {
+      "id": "AFF-TRACK-001",
+      "category": "AFFILIATE",
+      "title": "Tracking real dos quatro marketplaces ainda sem evidência controlada",
+      "severity": "P1",
+      "component": "Affiliate links",
+      "status": "PENDING_EXTERNAL_VALIDATION",
+      "ownerAgent": "MARKETPLACE_AGENT",
+      "iterationCreated": 1,
+      "impact": "Quality Gate de integrações não pode ser aprovado sem validar redirecionamento e identificador."
+    },
+    {
+      "id": "REL-DUP-001",
+      "category": "RELIABILITY",
+      "title": "Fingerprint instável permitia o mesmo produto com texto ou imagem alterados",
+      "severity": "P1",
+      "component": "WhatsApp extension",
+      "file": "chrome-extension/whatsapp.js",
+      "status": "FIXED_AUTOMATED_PENDING_REAL_E2E",
+      "ownerAgent": "RELIABILITY_AGENT",
+      "iterationCreated": 1,
+      "rootCause": "Identidade dependia de imagem e texto completos.",
+      "fix": "Fingerprint v3 usa identidade canônica marketplace+productId, com URL normalizada como fallback.",
+      "test": "tests/quality.test.ts - fingerprint v3 e trava no pacote",
+      "evidence": "12/12 testes automatizados PASS; confirmação no WhatsApp real pendente."
+    },
+    {
+      "id": "REL-SEND-001",
+      "category": "RELIABILITY",
+      "title": "Clique era gravado como enviado sem confirmação visual",
+      "severity": "P1",
+      "component": "WhatsApp extension",
+      "file": "chrome-extension/whatsapp.js",
+      "status": "FIXED_AUTOMATED_PENDING_REAL_E2E",
+      "ownerAgent": "RELIABILITY_AGENT",
+      "iterationCreated": 1,
+      "rootCause": "COMMIT ocorria imediatamente após button.click().",
+      "fix": "Aguardar nova bolha de saída; timeout vira uncertain e não é reenviado automaticamente.",
+      "test": "tests/quality.test.ts - confirmação visual e estado uncertain",
+      "evidence": "12/12 testes automatizados PASS; confirmação no WhatsApp real pendente."
+    },
+    {
+      "id": "REL-QUEUE-001",
+      "category": "RELIABILITY",
+      "title": "Fila ativa podia ser sobrescrita e reserva persistia por sete dias",
+      "severity": "P1",
+      "component": "Chrome extension",
+      "file": "chrome-extension/background.js",
+      "status": "FIXED_AUTOMATED_PENDING_REAL_E2E",
+      "ownerAgent": "RELIABILITY_AGENT",
+      "iterationCreated": 1,
+      "rootCause": "Mesmo TTL para histórico e in-flight, sem estado/revisão da execução.",
+      "fix": "TTL in-flight de 10 minutos, run state, queueId/revision e proteção ao limpar histórico.",
+      "test": "tests/quality.test.ts - TTL, run state e pacote",
+      "evidence": "12/12 testes automatizados PASS; teste com duas abas/reinício do Chrome pendente."
+    },
+    {
+      "id": "DATA-001",
+      "category": "DATA",
+      "title": "Criação concorrente podia duplicar produtos no Firestore",
+      "severity": "P1",
+      "component": "Firestore products",
+      "file": "src/App.tsx",
+      "status": "FIXED_VERIFIED_CI",
+      "ownerAgent": "BACKEND_AGENT",
+      "iterationCreated": 1,
+      "rootCause": "addDoc gerava IDs aleatórios para o mesmo produto.",
+      "fix": "IDs determinísticos por identidade do produto e setDoc; batches divididos em blocos de 450.",
+      "test": "tests/quality.test.ts - IDs determinísticos e ausência de addDoc",
+      "evidence": "Quality Gate run 31545907589 PASS."
+    },
+    {
+      "id": "SEC-002",
+      "category": "SECURITY",
+      "title": "Regras Firestore aceitavam campos e tipos insuficientemente validados",
+      "severity": "P1",
+      "component": "Firestore rules",
+      "file": "firestore.rules",
+      "status": "FIXED_VERIFIED_CI",
+      "ownerAgent": "SECURITY_AGENT",
+      "iterationCreated": 1,
+      "fix": "Allowlist de campos, tipos, limites, marketplace e validação também em update de users.",
+      "test": "tests/quality.test.ts - regras estritas",
+      "evidence": "Quality Gate run 31545907589 PASS."
+    }
+  ],
+  "tests": [
+    {
+      "id": "TEST-STATIC-001",
+      "level": 1,
+      "name": "TypeScript noEmit",
+      "command": "npm run lint",
+      "status": "PASS",
+      "critical": true,
+      "evidence": "GitHub Actions Quality Gate run 31545907589"
+    },
+    {
+      "id": "TEST-UNIT-001",
+      "level": 2,
+      "name": "Preço Shopee API e URL segura",
+      "command": "npm test",
+      "status": "PASS",
+      "critical": true,
+      "evidence": "GitHub Actions Quality Gate run 31545907589"
+    },
+    {
+      "id": "TEST-REG-001",
+      "level": 2,
+      "name": "Não escolher frete como preço",
+      "command": "npm test",
+      "status": "PASS",
+      "critical": true,
+      "evidence": "GitHub Actions Quality Gate run 31545907589"
+    },
+    {
+      "id": "TEST-REG-002",
+      "level": 2,
+      "name": "Versão app/fonte/ZIP consistente",
+      "command": "npm test",
+      "status": "PASS",
+      "critical": true,
+      "evidence": "GitHub Actions Quality Gate run 31545907589"
+    },
+    {
+      "id": "TEST-REG-003",
+      "level": 2,
+      "name": "Trava persistente de duplicidade presente no pacote",
+      "command": "npm test",
+      "status": "PASS",
+      "critical": true,
+      "evidence": "GitHub Actions Quality Gate run 31545907589"
+    },
+    {
+      "id": "TEST-BUILD-001",
+      "level": 1,
+      "name": "Build de produção Vite",
+      "command": "npm run build",
+      "status": "PASS",
+      "critical": true,
+      "evidence": "GitHub Actions Quality Gate run 31545907589"
+    },
+    {
+      "id": "TEST-E2E-001",
+      "level": 4,
+      "name": "Fluxo usuário → produto → revisão → extensão → WhatsApp",
+      "status": "PENDING_REAL_BROWSER",
+      "critical": true
+    },
+    {
+      "id": "TEST-MKT-001",
+      "level": 6,
+      "name": "Links e tracking dos quatro marketplaces",
+      "status": "PENDING_EXTERNAL_VALIDATION",
+      "critical": true
+    }
+  ],
+  "criticalFlows": [
+    {
+      "id": "FLOW-001",
+      "name": "Capturar produto Shopee sem confundir frete",
+      "status": "PENDING_VALIDATION"
+    },
+    {
+      "id": "FLOW-002",
+      "name": "Revisar e enviar fila sem duplicar anúncios",
+      "status": "PENDING_VALIDATION"
+    },
+    {
+      "id": "FLOW-003",
+      "name": "Abrir link afiliado no produto correto com tracking",
+      "status": "BLOCKED_EXTERNAL_VALIDATION"
+    }
+  ],
+  "scoreHistory": [
+    {
+      "iteration": 1,
+      "phase": "DISCOVERY",
+      "score": 55,
+      "verdict": "REJECTED"
+    },
+    {
+      "iteration": 1,
+      "phase": "IMPLEMENTATION",
+      "score": 76,
+      "verdict": "REJECTED",
+      "note": "Score provisório; testes e validações reais pendentes."
+    },
+    {
+      "iteration": 1,
+      "phase": "INDEPENDENT_JUDGE",
+      "score": 73,
+      "verdict": "REJECTED",
+      "commit": "8ab919a2800d466c49b9c04e1e356a05db9f9004",
+      "note": "CI passou; E2E real, Shopee real e tracking dos quatro marketplaces pendentes."
+    }
+  ],
+  "changes": [
+    {
+      "iteration": 1,
+      "description": "Extensão 1.0.10 rejeita valores de frete/parcelas no fallback Shopee."
+    },
+    {
+      "iteration": 1,
+      "description": "Fontes da extensão sincronizadas com o ZIP distribuído."
+    },
+    {
+      "iteration": 1,
+      "description": "Suíte de regressão e workflow de Quality Gate adicionados."
+    },
+    {
+      "iteration": 1,
+      "description": "Estado multiagente persistente criado."
+    },
+    {
+      "iteration": 1,
+      "description": "Fingerprint v3 por identidade canônica e proteção de fila/in-flight contra duplicidades."
+    },
+    {
+      "iteration": 1,
+      "description": "Envio só é confirmado após nova bolha de saída; timeout permanece uncertain sem reenvio automático."
+    },
+    {
+      "iteration": 1,
+      "description": "IDs Firestore determinísticos, batches em blocos de 450 e regras de dados mais estritas."
+    },
+    {
+      "iteration": 1,
+      "description": "CSP endurecida, build determinístico com npm ci e domínio Firebase corrigido."
+    }
+  ],
+  "decisions": [
+    {
+      "id": "DEC-001",
+      "iteration": 1,
+      "decision": "Usar agent-state.json versionado como fonte de verdade inicial.",
+      "reason": "Não exige migração de banco e preserva histórico junto ao código; pode ser migrado para Firestore futuramente."
+    },
+    {
+      "id": "DEC-002",
+      "iteration": 1,
+      "decision": "Quality Gate permanece REJECTED até CI, E2E e tracking real passarem.",
+      "reason": "Impede autoaprovação e score artificial."
+    },
+    {
+      "id": "DEC-003",
+      "iteration": 1,
+      "decision": "Não mesclar nem publicar a iteração enquanto o juiz mantiver FAIL.",
+      "reason": "Score 73/100, testes críticos 75% e fluxos críticos 0% não atendem aos gates do Prompt Mestre."
+    },
+    {
+      "id": "DEC-004",
+      "iteration": 1,
+      "decision": "Não afirmar sucesso absoluto da trava de duplicidade apenas com testes estáticos/automatizados.",
+      "reason": "O fluxo real com Chrome, extensão e WhatsApp ainda precisa de evidência controlada."
+    }
+  ],
+  "blockedItems": [
+    {
+      "id": "BLOCK-001",
+      "issueId": "AFF-TRACK-001",
+      "dependency": "Sessões reais dos programas de afiliados e validação controlada pelo titular.",
+      "attempts": 0,
+      "status": "PENDING_EXTERNAL_VALIDATION",
+      "impactOnScore": 10,
+      "nextAction": "Validar destino, identificador e tracking de Mercado Livre, Amazon, AliExpress e Shopee sem compra ou tráfego artificial."
+    },
+    {
+      "id": "BLOCK-002",
+      "issueId": "TEST-E2E-001",
+      "dependency": "Chrome com a extensão 1.0.10 carregada e sessão real do WhatsApp Web.",
+      "attempts": 0,
+      "status": "PENDING_REAL_BROWSER",
+      "impactOnScore": 7,
+      "nextAction": "Executar lote controlado, confirmar exatamente um envio por produto, ordem, parada/retomada e estados uncertain."
+    },
+    {
+      "id": "BLOCK-003",
+      "issueId": "AFF-SHOPEE-001",
+      "dependency": "Página real do produto Shopee fornecido, com extensão 1.0.10.",
+      "attempts": 0,
+      "status": "PENDING_REAL_BROWSER",
+      "impactOnScore": 4,
+      "nextAction": "Confirmar que o produto retorna R$ 33,90 e nunca o frete R$ 9,62."
+    }
+  ],
+  "testSummary": {
+    "workflowRun": 31545907589,
+    "commit": "8ab919a2800d466c49b9c04e1e356a05db9f9004",
+    "ciStatus": "PASS",
+    "automatedTests": {
+      "passed": 12,
+      "failed": 0,
+      "total": 12
+    },
+    "typeScript": "PASS",
+    "build": "PASS",
+    "criticalAudit": "PASS",
+    "criticalGateTests": {
+      "passed": 6,
+      "total": 8,
+      "percent": 75
+    }
+  },
+  "auditTrail": [
+    {
+      "event": "CI_FAILED",
+      "run": 31545828682,
+      "result": "11/12 testes; build e audit ignorados",
+      "decision": "Corrigir a asserção de regressão sem enfraquecer o código."
+    },
+    {
+      "event": "CI_PASSED",
+      "run": 31545907589,
+      "result": "TypeScript, 12/12 testes, build e audit crítico PASS."
+    },
+    {
+      "event": "JUDGE_REVIEW",
+      "commit": "8ab919a2800d466c49b9c04e1e356a05db9f9004",
+      "score": 73,
+      "verdict": "REJECTED"
+    }
+  ]
+}

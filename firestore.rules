@@ -46,14 +46,37 @@ service cloud.firestore {
                     incoming().email == request.auth.token.email;
       
       // Pilar 4: Identidade imutável na atualização
-      allow update: if isOwner(userId) && isVerified() && 
+      allow update: if isOwner(userId) && isVerified() &&
+                    isValidUser(incoming()) &&
                     incoming().email == existing().email;
 
       match /products/{productId} {
         function isValidProduct(data) {
-          return data.userId == request.auth.uid &&
-                 data.title is string && data.title.size() <= 500 &&
-                 data.link is string && data.link.size() <= 2000;
+          return data.keys().hasAll([
+                   'userId', 'title', 'image', 'price', 'originalPrice', 'coupon',
+                   'link', 'groupLink', 'category', 'store', 'marketplace',
+                   'addedAt', 'isHighlight', 'selected'
+                 ]) &&
+                 data.keys().hasOnly([
+                   'userId', 'title', 'image', 'price', 'originalPrice', 'coupon',
+                   'link', 'groupLink', 'category', 'store', 'marketplace',
+                   'addedAt', 'isHighlight', 'selected', 'labelOriginalPrice',
+                   'labelPrice', 'labelCoupon', 'labelGroupLink'
+                 ]) &&
+                 data.userId == request.auth.uid &&
+                 data.title is string && data.title.size() >= 4 && data.title.size() <= 500 &&
+                 data.image is string && data.image.size() <= 2000 &&
+                 data.price is string && data.price.size() <= 40 &&
+                 data.originalPrice is string && data.originalPrice.size() <= 40 &&
+                 data.coupon is string && data.coupon.size() <= 120 &&
+                 data.link is string && data.link.size() <= 2000 &&
+                 data.groupLink is string && data.groupLink.size() <= 1000 &&
+                 data.category is string && data.category.size() <= 120 &&
+                 data.store is string && data.store.size() <= 200 &&
+                 data.marketplace in ['mercado-livre', 'amazon', 'aliexpress', 'shopee'] &&
+                 data.addedAt is int &&
+                 data.isHighlight is bool &&
+                 data.selected is bool;
         }
 
         // Pilar 8: Consulta de Lista Segura

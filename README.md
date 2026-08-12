@@ -2,11 +2,11 @@
 
 Sistema web para capturar ofertas do Mercado Livre, editar os anúncios, organizar uma fila e preparar o envio pelo WhatsApp Web.
 
-Produção: https://ml-afiliados-pro.vercel.app
+Produção: https://filiados-phi.vercel.app
 
 ## Requisitos
 
-- Node.js 20 ou superior
+- Node.js 22
 - Projeto Firebase com Authentication (Google) e Firestore
 - Chave Gemini, opcional, para melhorar títulos com IA
 
@@ -20,7 +20,9 @@ Produção: https://ml-afiliados-pro.vercel.app
 ## Verificações
 
 - `npm run lint`: valida os tipos TypeScript.
+- `npm test`: executa os testes de regressão.
 - `npm run build`: gera a aplicação de produção.
+- `npm run check`: executa tipos, testes e build.
 - `npm start`: inicia o servidor local com as APIs e o frontend.
 
 ## Implantação
@@ -29,7 +31,7 @@ As funções em `api/` são compatíveis com Vercel. Cadastre as mesmas variáve
 
 Na Vercel, o projeto utiliza o framework Vite, o comando `npm run build` e a saída `dist`. Cadastre `GEMINI_API_KEY` como variável Sensitive para Production, Preview e Development. Depois de alterar variáveis, gere um novo deploy.
 
-O login Google utiliza o domínio de produção como `authDomain` e faz proxy transparente de `/__/auth/*` para o Firebase. Além de autorizar `ml-afiliados-pro.vercel.app` no Firebase Authentication, mantenha `https://ml-afiliados-pro.vercel.app/__/auth/handler` entre os URIs de redirecionamento autorizados do cliente OAuth Google.
+O login Google usa `VITE_FIREBASE_AUTH_DOMAIN` (ou o domínio padrão do Firebase) e faz proxy transparente de `/__/auth/*` para o Firebase. Além de autorizar `ml-afiliados-pro.vercel.app` no Firebase Authentication, mantenha `https://filiados-phi.vercel.app/__/auth/handler` entre os URIs de redirecionamento autorizados do cliente OAuth Google.
 
 ## Configuração do Firestore
 

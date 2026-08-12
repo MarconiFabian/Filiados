@@ -74,7 +74,6 @@ import {
   onSnapshot, 
   query, 
   orderBy, 
-  addDoc, 
   deleteDoc, 
   updateDoc,
   serverTimestamp,
@@ -103,6 +102,26 @@ function formatCurrency(value: string | number): string {
   const parsed = parseCurrencyValue(value);
   if (parsed === null) return '';
   return `R$ ${parsed.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function productStorageId(marketplace: string, link: string): string {
+  let normalized = link.trim().toLowerCase();
+  try {
+    const url = new URL(link);
+    url.hash = '';
+    for (const key of [...url.searchParams.keys()]) {
+      if (/^(utm_|matt_|fbclid|gclid|ref|source|campaign)/i.test(key)) url.searchParams.delete(key);
+    }
+    normalized = url.toString().replace(/\/$/, '').toLowerCase();
+  } catch {}
+
+  const source = `${marketplace}:${normalized}`;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index++) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `product-${marketplace.replace(/[^a-z0-9-]/gi, '-')}-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 interface Product {
@@ -190,7 +209,7 @@ interface DeliveryHistoryEntry {
   timestamp: number;
 }
 
-const REQUIRED_EXTENSION_VERSION = '1.0.9';
+const REQUIRED_EXTENSION_VERSION = '1.0.10';
 const STORAGE_KEY = 'ml_afiliados_v1';
 
 enum OperationType {
@@ -242,10 +261,10 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 
 type ShopeeExtensionCapture = {
   ok?: boolean;
-  price?: unknown;
-  originalPrice?: unknown;
-  title?: unknown;
-  image?: unknown;
+  price?: string | number;
+  originalPrice?: string | number;
+  title?: string;
+  image?: string;
   error?: string;
 };
 
@@ -278,7 +297,7 @@ function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture
     const startupTimeout = window.setTimeout(() => {
       if (started) return;
       cleanup();
-      reject(new Error('Atualize a extensão ML Afiliados Sender para a versão 1.0.9.'));
+      reject(new Error('Atualize a extensão ML Afiliados Sender para a versão 1.0.10.'));
     }, 2_500);
     const captureTimeout = window.setTimeout(() => {
       cleanup();
@@ -297,7 +316,7 @@ function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture
 
 async function downloadExtensionArchive() {
   try {
-    const response = await fetch('/ml-afiliados-sender-v1.0.9.zip.b64', { cache: 'no-store' });
+    const response = await fetch('/ml-afiliados-sender-v1.0.10.zip.b64', { cache: 'no-store' });
     if (!response.ok) throw new Error(`Download respondeu HTTP ${response.status}.`);
     const encoded = (await response.text()).replace(/\s+/g, '');
     const binary = window.atob(encoded);
@@ -307,7 +326,7 @@ async function downloadExtensionArchive() {
     const objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
     const anchor = document.createElement('a');
     anchor.href = objectUrl;
-    anchor.download = 'ml-afiliados-sender-v1.0.9.zip';
+    anchor.download = 'ml-afiliados-sender-v1.0.10.zip';
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -325,14 +344,20 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
 
-  const toggleAllSelection = (select: boolean) => {
+  const toggleAllSelection = async (select: boolean) => {
     if (!user) return;
-    const batch = writeBatch(db);
-    products.forEach(p => {
-      const pRef = doc(db, 'users', user.uid, 'products', p.id);
-      batch.update(pRef, { selected: select });
-    });
-    batch.commit().catch(err => console.error("Error toggling all:", err));
+    try {
+      for (let start = 0; start < products.length; start += 450) {
+        const batch = writeBatch(db);
+        for (const product of products.slice(start, start + 450)) {
+          batch.update(doc(db, 'users', user.uid, 'products', product.id), { selected: select });
+        }
+        await batch.commit();
+      }
+    } catch (error) {
+      console.error('Erro ao selecionar todos:', error);
+      toast.error('Não foi possível atualizar toda a fila. Tente novamente.');
+    }
   };
 
   const toggleProductSelection = (id: string, current: boolean) => {
@@ -461,6 +486,8 @@ export default function App() {
         const currentDomain = window.location.hostname;
         if (err?.code === 'auth/unauthorized-domain') {
           setLoginError(`O domínio ${currentDomain} ainda não está autorizado no Firebase.`);
+        } else if (err?.code === 'auth/internal-error') {
+          setLoginError('O redirecionamento foi bloqueado pelo navegador. Use o botão Entrar com Google para abrir a janela segura de login.');
         } else {
           setLoginError(`Não foi possível concluir o login: ${err?.code || err?.message || 'erro desconhecido'}.`);
         }
@@ -557,7 +584,7 @@ export default function App() {
     };
   }, [user]);
 
-  const handleLogin = async (useRedirect = true) => {
+  const handleLogin = async (useRedirect = false) => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     setLoginError('');
@@ -578,7 +605,7 @@ export default function App() {
 
       if (err?.code === 'auth/popup-closed-by-user') return;
       if (err?.code === 'auth/popup-blocked') {
-        setLoginError('O navegador bloqueou a janela. Use o botão principal, que entra por redirecionamento.');
+        setLoginError('O navegador bloqueou a janela do Google. Libere pop-ups para este site ou use a opção de redirecionamento.');
       } else if (err?.code === 'auth/unauthorized-domain') {
         setLoginError(`O domínio ${currentDomain} ainda não está autorizado no Firebase.`);
       } else {
@@ -854,11 +881,12 @@ export default function App() {
         selected: false,
       };
 
-      const createdProduct = await addDoc(collection(db, `users/${user.uid}/products`), newProductData);
+      const createdProductId = productStorageId(marketplace.id, newProductData.link);
+      await setDoc(doc(db, 'users', user.uid, 'products', createdProductId), newProductData);
       if (!options.silent) {
         setInputUrl('');
         if (requiresManualPrice) {
-          setSelectedProductId(createdProduct.id);
+          setSelectedProductId(createdProductId);
           toast.success(shopeeCaptureWarning
             ? `${marketplace.name}: preço pendente. ${shopeeCaptureWarning}`
             : `${marketplace.name}: título e foto adicionados. Informe o preço no editor antes de enviar.`, { duration: 7000 });
@@ -1388,7 +1416,8 @@ export default function App() {
         const originalValue = parseCurrencyValue(String(item.originalPrice ?? item.price_from ?? item.priceOriginal ?? ''));
         const importedLink = String(item.affiliate_link ?? item.link ?? '').trim();
         const importedMarketplace = detectMarketplaceUrl(importedLink) || marketplaceFromStore(String(item.store ?? ''));
-        return addDoc(collection(db, 'users', user.uid, 'products'), {
+        const importedProductId = productStorageId(importedMarketplace.id, importedLink || `${title}|${String(item.image ?? '').trim()}`);
+        return setDoc(doc(db, 'users', user.uid, 'products', importedProductId), {
           userId: user.uid,
           title,
           image: String(item.image ?? '').trim(),
@@ -1462,13 +1491,13 @@ export default function App() {
             <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-left text-sm font-bold text-red-700">
               <p>{loginError}</p>
               {loginError.includes('não está autorizado') && (
-                <p className="mt-2 text-xs font-medium text-red-600">Firebase Console → Authentication → Settings → Authorized domains → adicione ml-afiliados-pro.vercel.app</p>
+                <p className="mt-2 text-xs font-medium text-red-600">Firebase Console → Authentication → Settings → Authorized domains → adicione {window.location.hostname}</p>
               )}
             </div>
           )}
 
           <button 
-            onClick={() => handleLogin(true)}
+            onClick={() => handleLogin(false)}
             disabled={isLoginLoading}
             className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl shadow-slate-200 disabled:cursor-wait disabled:opacity-60"
           >
@@ -1477,11 +1506,11 @@ export default function App() {
           </button>
           
           <button 
-            onClick={() => handleLogin(false)}
+            onClick={() => handleLogin(true)}
             disabled={isLoginLoading}
             className="w-full py-3 bg-white text-slate-500 border border-slate-200 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
           >
-             Tentar abrir em uma nova janela
+             Entrar por redirecionamento (alternativa)
           </button>
           <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
              <div className="text-left">
@@ -2199,7 +2228,7 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-black uppercase tracking-wider text-emerald-900">Extensão ML Afiliados Sender</p>
-                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.9 para Google Chrome</p>
+                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.10 para Google Chrome</p>
                 </div>
                 <button
                   type="button"
@@ -2221,7 +2250,7 @@ export default function App() {
                   <li>Ative o <b>Modo do desenvolvedor</b> no canto superior direito.</li>
                   <li>Clique em <b>Carregar sem compactação</b>.</li>
                   <li>Selecione a pasta extraída que contém o arquivo <b>manifest.json</b>.</li>
-                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.9</b> e deixe a extensão ativada.</li>
+                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.10</b> e deixe a extensão ativada.</li>
                   <li>Fixe a extensão no ícone de quebra-cabeça do Chrome e abra o WhatsApp Web.</li>
                 </ol>
                 <p className="mt-3 rounded-lg bg-amber-50 p-2 text-[9px] font-bold text-amber-800">
