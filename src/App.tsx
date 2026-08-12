@@ -486,6 +486,8 @@ export default function App() {
         const currentDomain = window.location.hostname;
         if (err?.code === 'auth/unauthorized-domain') {
           setLoginError(`O domínio ${currentDomain} ainda não está autorizado no Firebase.`);
+        } else if (err?.code === 'auth/internal-error') {
+          setLoginError('O redirecionamento foi bloqueado pelo navegador. Use o botão Entrar com Google para abrir a janela segura de login.');
         } else {
           setLoginError(`Não foi possível concluir o login: ${err?.code || err?.message || 'erro desconhecido'}.`);
         }
@@ -582,7 +584,7 @@ export default function App() {
     };
   }, [user]);
 
-  const handleLogin = async (useRedirect = true) => {
+  const handleLogin = async (useRedirect = false) => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     setLoginError('');
@@ -603,7 +605,7 @@ export default function App() {
 
       if (err?.code === 'auth/popup-closed-by-user') return;
       if (err?.code === 'auth/popup-blocked') {
-        setLoginError('O navegador bloqueou a janela. Use o botão principal, que entra por redirecionamento.');
+        setLoginError('O navegador bloqueou a janela do Google. Libere pop-ups para este site ou use a opção de redirecionamento.');
       } else if (err?.code === 'auth/unauthorized-domain') {
         setLoginError(`O domínio ${currentDomain} ainda não está autorizado no Firebase.`);
       } else {
@@ -1495,7 +1497,7 @@ export default function App() {
           )}
 
           <button 
-            onClick={() => handleLogin(true)}
+            onClick={() => handleLogin(false)}
             disabled={isLoginLoading}
             className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-lg hover:bg-black transition-all flex items-center justify-center gap-3 shadow-xl shadow-slate-200 disabled:cursor-wait disabled:opacity-60"
           >
@@ -1504,11 +1506,11 @@ export default function App() {
           </button>
           
           <button 
-            onClick={() => handleLogin(false)}
+            onClick={() => handleLogin(true)}
             disabled={isLoginLoading}
             className="w-full py-3 bg-white text-slate-500 border border-slate-200 rounded-xl font-bold text-sm hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
           >
-             Tentar abrir em uma nova janela
+             Entrar por redirecionamento (alternativa)
           </button>
           <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4">
              <div className="text-left">
