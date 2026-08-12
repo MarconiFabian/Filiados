@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { runInNewContext } from 'node:vm';
 import * as cheerio from 'cheerio';
 import { extractProduct, extractShopeeApiProduct, shopeeProductIds } from '../api/scrape.ts';
 import { getMarketplace, isAffiliateLink } from '../lib/marketplaces.ts';
@@ -112,10 +113,10 @@ test('captura Shopee termina antes do timeout do aplicativo', async () => {
     readFile('src/App.tsx', 'utf8'),
   ]);
   assert.match(background, /active: true/);
-  assert.match(background, /waitForTabComplete\(tabId, 12_000\)/);
+  assert.match(background, /waitForShopeePageCapture\(tabId, 12_000\)/);
   assert.match(background, /AbortSignal\.timeout\(8_000\)/);
-  assert.match(background, /attempt < 8/);
-  assert.match(background, /await sleep\(450\)/);
+  assert.match(background, /attempt < 4/);
+  assert.match(background, /await sleep\(350\)/);
   assert.match(app, /captureTimeout = window\.setTimeout/);
   assert.match(app, /}, 35_000\)/);
   assert.match(app, /toast\(shopeeCaptureWarning/);
@@ -136,24 +137,110 @@ test('captura visual aceita faixa de preço sem herdar o bloco distante de frete
   assert.ok(mainPriceScore > freightScore);
 });
 
+async function executeShopeeObserver(payload: unknown) {
+  const source = await readFile('chrome-extension/shopee-main.js', 'utf8');
+  const messages: any[] = [];
+  const response = {
+    ok: true,
+    clone: () => ({ ok: true, json: async () => payload }),
+  };
+  class FakeRequest {
+    url: string;
+    constructor(url: string) { this.url = url; }
+  }
+  class FakeXhr {
+    responseType = '';
+    response: unknown = null;
+    responseText = '';
+    addEventListener() {}
+    open() {}
+    send() {}
+  }
+  const pageWindow: any = {
+    fetch: async () => response,
+    postMessage: (message: unknown) => messages.push(message),
+  };
+  pageWindow.window = pageWindow;
+  runInNewContext(source, {
+    window: pageWindow,
+    location: {
+      href: 'https://shopee.com.br/product/1081892586/40971673156',
+      origin: 'https://shopee.com.br',
+    },
+    document: { querySelector: () => null },
+    XMLHttpRequest: FakeXhr,
+    Request: FakeRequest,
+    URL,
+  });
+
+  await pageWindow.fetch('https://shopee.com.br/api/v4/pdp/get_pc?item_id=40971673156&shop_id=1081892586');
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  return messages.find((message) => message?.type === 'ML_SHOPEE_PDP_CAPTURED')?.payload;
+}
+
+test('observador Shopee captura formato moderno de faixa sem nova requisição', async () => {
+  const captured = await executeShopeeObserver({
+    data: {
+      product_price: { price: { range_min: 4_999_000, range_max: 7_999_000 } },
+      item: {
+        shop_id: 1_081_892_586,
+        item_id: 40_971_673_156,
+        title: 'Jogo de lençol',
+        image: 'imagem-teste',
+        currency: 'BRL',
+      },
+    },
+  });
+  assert.ok(captured);
+  assert.equal(captured.price, 49.99);
+  assert.equal(captured.priceMax, 79.99);
+  assert.equal(captured.source, 'shopee-page-response');
+});
+
+test('observador Shopee rejeita resposta de outro produto', async () => {
+  const captured = await executeShopeeObserver({
+    data: {
+      product_price: { price: { single_value: 999_000 } },
+      item: {
+        shop_id: 111,
+        item_id: 222,
+        title: 'Produto divergente',
+        currency: 'BRL',
+      },
+    },
+  });
+  assert.equal(captured, undefined);
+});
+
+test('manifest injeta observador Shopee no MAIN world desde document_start', async () => {
+  const manifest = JSON.parse(await readFile('chrome-extension/manifest.json', 'utf8'));
+  const main = manifest.content_scripts.find((entry: any) => entry.js?.includes('shopee-main.js'));
+  const bridge = manifest.content_scripts.find((entry: any) => entry.js?.includes('shopee-bridge.js'));
+  assert.equal(main.world, 'MAIN');
+  assert.equal(main.run_at, 'document_start');
+  assert.equal(bridge.world, 'ISOLATED');
+  assert.equal(bridge.run_at, 'document_start');
+  assert.ok(main.matches.includes('https://*.shopee.com.br/*'));
+});
+
 test('app, fonte e pacote baixável usam a mesma versão da extensão', async () => {
   const [app, manifestText, archiveText] = await Promise.all([
     readFile('src/App.tsx', 'utf8'),
     readFile('chrome-extension/manifest.json', 'utf8'),
-    readFile('public/ml-afiliados-sender-v1.0.13.zip.b64', 'utf8'),
+    readFile('public/ml-afiliados-sender-v1.0.14.zip.b64', 'utf8'),
   ]);
   const manifest = JSON.parse(manifestText);
   const zip = Buffer.from(archiveText.replace(/\s+/g, ''), 'base64');
   const packagedManifest = JSON.parse(extractStoredEntry(zip, 'manifest.json'));
 
-  assert.equal(manifest.version, '1.0.13');
+  assert.equal(manifest.version, '1.0.14');
   assert.equal(packagedManifest.version, manifest.version);
-  assert.match(app, /REQUIRED_EXTENSION_VERSION = '1\.0\.13'/);
-  assert.match(app, /ml-afiliados-sender-v1\.0\.13\.zip\.b64/);
+  assert.match(app, /REQUIRED_EXTENSION_VERSION = '1\.0\.14'/);
+  assert.match(app, /ml-afiliados-sender-v1\.0\.14\.zip\.b64/);
 });
 
 test('pacote mantém a proteção persistente contra anúncios duplicados', async () => {
-  const archiveText = await readFile('public/ml-afiliados-sender-v1.0.13.zip.b64', 'utf8');
+  const archiveText = await readFile('public/ml-afiliados-sender-v1.0.14.zip.b64', 'utf8');
   const background = extractStoredEntry(Buffer.from(archiveText.replace(/\s+/g, ''), 'base64'), 'background.js');
   const whatsapp = extractStoredEntry(Buffer.from(archiveText.replace(/\s+/g, ''), 'base64'), 'whatsapp.js');
 
