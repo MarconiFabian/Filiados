@@ -300,12 +300,12 @@ async function captureShopeeApiFromTab(tabId) {
         if (typeof value === 'string' && /[.,]/.test(value)) {
           const normalized = value.replace(/R\$\s*/gi, '').replace(/\s+/g, '').replace(/\./g, '').replace(',', '.');
           const parsed = Number(normalized);
-          return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+          return Number.isFinite(parsed) && parsed > 0 && parsed <= 1000000 ? parsed : null;
         }
         const raw = Number(value);
         if (!Number.isFinite(raw) || raw <= 0) return null;
         const parsed = Number.isInteger(raw) && raw >= 100000 ? raw / 100000 : raw;
-        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        return Number.isFinite(parsed) && parsed > 0 && parsed <= 1000000 ? parsed : null;
       };
       const firstMoney = (values) => {
         for (const value of values) {
@@ -321,49 +321,73 @@ async function captureShopeeApiFromTab(tabId) {
         if (/^https?:\/\//i.test(image)) return image;
         return 'https://down-br.img.susercontent.com/file/' + image.replace(/^\/+/, '');
       };
+      const csrfMatch = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/i);
+      const csrfToken = csrfMatch ? decodeURIComponent(csrfMatch[1]) : '';
+      const resourceEndpoints = performance.getEntriesByType('resource')
+        .map((entry) => String(entry?.name || ''))
+        .filter((value) => /\/api\/v4\/(?:pdp\/get_pc|item\/get)\?/i.test(value))
+        .filter((value) => {
+          const resourceIds = parseIds(value);
+          return resourceIds?.shopId === ids.shopId && resourceIds?.itemId === ids.itemId;
+        });
       const endpoints = [
+        ...resourceEndpoints,
         '/api/v4/pdp/get_pc?item_id=' + encodeURIComponent(ids.itemId) + '&shop_id=' + encodeURIComponent(ids.shopId),
         '/api/v4/item/get?itemid=' + encodeURIComponent(ids.itemId) + '&shopid=' + encodeURIComponent(ids.shopId),
       ];
 
-      for (const endpoint of endpoints) {
+      for (const endpoint of [...new Set(endpoints)]) {
         try {
+          const headers = {
+            Accept: 'application/json, text/plain, */*',
+            'x-api-source': 'pc',
+            'x-requested-with': 'XMLHttpRequest',
+          };
+          if (csrfToken) headers['x-csrftoken'] = csrfToken;
           const response = await fetch(endpoint, {
             credentials: 'include',
             cache: 'no-store',
-            headers: {
-              Accept: 'application/json, text/plain, */*',
-              'x-api-source': 'pc',
-              'x-requested-with': 'XMLHttpRequest',
-            },
+            headers,
           });
-          if (!response.ok) continue;
+          if (!response.ok || [401, 403, 418, 429].includes(response.status)) continue;
+          if (!String(response.headers.get('content-type') || '').toLowerCase().includes('json')) continue;
           const payload = await response.json();
+          if (payload?.error && Number(payload.error) !== 0) continue;
           const data = payload?.data || {};
           const item = data?.item && typeof data.item === 'object' ? data.item : data;
           if (!item || typeof item !== 'object') continue;
 
+          const responseShopId = String(item.shopid ?? item.shop_id ?? item.shop?.shopid ?? item.shop?.shop_id ?? '');
+          const responseItemId = String(item.itemid ?? item.item_id ?? '');
+          if (responseShopId && responseShopId !== ids.shopId) continue;
+          if (responseItemId && responseItemId !== ids.itemId) continue;
+          const currency = String(item.currency || data.currency || '').toUpperCase();
+          if (currency && currency !== 'BRL') continue;
+
           const models = Array.isArray(item.models) ? item.models : [];
-          const availableModels = models.filter((model) => Number(model?.stock ?? model?.normal_stock ?? 1) > 0);
-          const candidates = availableModels.length ? availableModels : models;
+          const selectedModelId = String(item.selected_modelid ?? item.selected_model_id ?? data.selected_modelid ?? '');
+          const selectedModel = selectedModelId
+            ? models.find((model) => String(model?.modelid ?? model?.model_id ?? '') === selectedModelId)
+            : null;
           const price = firstMoney([
+            selectedModel?.price,
             item.price,
             item.price_min,
-            ...candidates.map((model) => model?.price),
-            item.price_max,
           ]);
           if (price === null) continue;
 
           const originalPriceCandidate = firstMoney([
+            selectedModel?.price_before_discount,
             item.price_before_discount,
             item.price_min_before_discount,
-            ...candidates.map((model) => model?.price_before_discount),
-            item.price_max_before_discount,
           ]);
+          const priceMax = firstMoney([item.price_max]);
           return {
             ok: true,
-            source: 'shopee_api',
+            source: 'shopee-api-tab',
+            confidence: 'high',
             price,
+            priceMax: priceMax !== null && priceMax >= price ? priceMax : null,
             originalPrice: originalPriceCandidate !== null && originalPriceCandidate > price
               ? originalPriceCandidate
               : null,
@@ -371,6 +395,8 @@ async function captureShopeeApiFromTab(tabId) {
             image: imageUrl(item.image) || imageUrl(item.images),
             shopId: ids.shopId,
             itemId: ids.itemId,
+            modelId: selectedModelId || null,
+            capturedAt: Date.now(),
           };
         } catch {}
       }
@@ -455,7 +481,7 @@ async function captureShopeeProduct(url) {
               ].join(' ').replace(/\s+/g, ' ').trim();
 
               // Frete, parcelas e entrega não são o preço principal do produto.
-              if (/(?:frete|envio|entrega|parcela|\d+\s*x\s*R\$)/i.test(nearContext) && nearContext.length < 260) continue;
+              if (/(?:frete|envio|entrega|parcela|cashback|cupom|\d+\s*x\s*R\$)/i.test(nearContext)) continue;
 
               const style = getComputedStyle(node);
               const struck = /line-through/i.test(`${style.textDecorationLine} ${style.textDecoration}`);
@@ -480,30 +506,13 @@ async function captureShopeeProduct(url) {
           }
 
           if (price === null) {
-            for (const script of document.scripts) {
-              const source = script.textContent || '';
-              const match = source.match(/"price"\s*:\s*([0-9]{5,})/);
-              if (!match) continue;
-              const raw = Number(match[1]);
-              const candidate = raw / 100000;
-              if (Number.isFinite(candidate) && candidate > 0) {
-                price = candidate;
-                const oldMatch = source.match(/"price_before_discount"\s*:\s*([0-9]{5,})/);
-                if (oldMatch) {
-                  const oldCandidate = Number(oldMatch[1]) / 100000;
-                  if (oldCandidate > candidate) originalPrice = oldCandidate;
-                }
-                break;
-              }
-            }
-          }
-
-          if (price === null) {
             for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
               try {
                 const data = JSON.parse(script.textContent || 'null');
                 const nodes = Array.isArray(data) ? data : [data];
                 for (const node of nodes) {
+                  const nodeTypes = Array.isArray(node?.['@type']) ? node['@type'] : [node?.['@type']];
+                  if (!nodeTypes.some((type) => String(type).toLowerCase() === 'product')) continue;
                   const offers = node?.offers;
                   const offer = Array.isArray(offers) ? offers[0] : offers;
                   const candidate = Number(offer?.lowPrice || offer?.price);
