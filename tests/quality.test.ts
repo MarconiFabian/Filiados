@@ -103,7 +103,7 @@ test('captura Shopee usa a API autenticada da aba e valida a identidade do produ
   assert.match(background, /AbortSignal\.timeout\(7_000\)/);
   assert.match(background, /source: 'shopee-api-tab'/);
   assert.doesNotMatch(background, /source\.match\(\/"price"/);
-  assert.match(background, /frete\|envio\|entrega\|parcela\|cupom\|cashback/);
+  assert.match(background, /frete\|envio\|entrega\|parcela\|cashback\|cupom/);
 });
 
 test('app, fonte e pacote baixável usam a mesma versão da extensão', async () => {
