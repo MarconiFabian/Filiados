@@ -4,14 +4,14 @@
     "name": "Afiliados Pro",
     "repository": "MarconiFabian/Filiados",
     "version": "3.0.0",
-    "extensionVersion": "1.0.12",
-    "branch": "codex/shopee-timeout-hotfix-v1012-20260811",
+    "extensionVersion": "1.0.13",
+    "branch": "codex/shopee-visible-range-v1013-20260811",
     "environment": "pull-request",
-    "commitUnderTest": "981fccf64f4199b6dcaea2ec00ada803314a2919"
+    "commitUnderTest": "ba40df1cc37d8d04e5bc7d0fb278a361c96dd0ec"
   },
-  "iteration": 3,
+  "iteration": 4,
   "status": "IN_PROGRESS",
-  "updatedAt": "2026-08-11T22:45:00-03:00",
+  "updatedAt": "2026-08-11T23:02:00-03:00",
   "marketplaces": [
     "mercado-livre",
     "amazon",
@@ -61,9 +61,9 @@
       "ownerAgent": "MARKETPLACE_AGENT",
       "iterationCreated": 1,
       "rootCause": "A heurística antiga podia escolher o menor valor do escopo, inclusive frete. A versão 1.0.10 passou a falhar com segurança, mas não obteve o preço quando a Shopee bloqueou/alterou o HTML.",
-      "fix": "A extensão 1.0.12 abre a aba Shopee ativamente, limita carregamento a 12 s, compartilha orçamento de 8 s entre consultas da API e limita o fallback visual a 8 tentativas de 450 ms; o fluxo fica abaixo do timeout de 35 s do app.",
-      "test": "tests/quality.test.ts - identidade Shopee, timeout compartilhado, aba ativa, orçamento total e consistência do ZIP",
-      "evidence": "Quality Gate run 31554230193 PASS: TypeScript, 14/14 testes, build e audit crítico. Teste real com 1.0.12 pendente.",
+      "fix": "A extensão 1.0.13 limita o filtro de frete ao contexto local, reconhece faixas de preço visíveis e pontua tamanho/distância, evitando que a palavra Frete de um ancestral amplo descarte o preço principal.",
+      "test": "tests/quality.test.ts - faixa visível, contexto local, peso visual, frete e consistência do ZIP",
+      "evidence": "Quality Gate run 31554868509 PASS: TypeScript, 15/15 testes, build e audit crítico. Recaptura real com 1.0.13 pendente.",
       "iterationClosed": null
     },
     {
@@ -343,6 +343,14 @@
       "verdict": "REJECTED",
       "commit": "981fccf64f4199b6dcaea2ec00ada803314a2919",
       "note": "CI 14/14 passou. Score não foi elevado sem o teste real Shopee e o E2E WhatsApp."
+    },
+    {
+      "iteration": 4,
+      "phase": "CI",
+      "score": 73,
+      "verdict": "REJECTED",
+      "commit": "ba40df1cc37d8d04e5bc7d0fb278a361c96dd0ec",
+      "note": "CI 15/15 passou. Score não foi elevado antes da recaptura real."
     }
   ],
   "changes": [
@@ -397,6 +405,10 @@
     {
       "iteration": 3,
       "description": "Preço pendente passou a ser exibido como aviso visual, não sucesso."
+    },
+    {
+      "iteration": 4,
+      "description": "Extensão 1.0.13 reconhece faixa de preço Shopee e isola o contexto local do valor."
     }
   ],
   "decisions": [
@@ -435,6 +447,12 @@
       "iteration": 3,
       "decision": "Usar aba Shopee ativa durante a captura.",
       "reason": "O Chrome desacelera abas ocultas e o teste real da versão 1.0.11 ultrapassou 35 segundos sem preço."
+    },
+    {
+      "id": "DEC-007",
+      "iteration": 4,
+      "decision": "Não usar o texto completo do ancestral para classificar frete.",
+      "reason": "A captura real mostrou preço principal e frete no mesmo painel; o ancestral amplo provocava falso positivo."
     }
   ],
   "blockedItems": [
@@ -459,21 +477,21 @@
     {
       "id": "BLOCK-003",
       "issueId": "AFF-SHOPEE-001",
-      "dependency": "Página real do produto Shopee fornecido, com extensão 1.0.12.",
-      "attempts": 2,
+      "dependency": "Página real Shopee com faixa R$ 49,99 - R$ 79,99 e extensão 1.0.13.",
+      "attempts": 3,
       "status": "PENDING_REAL_BROWSER",
       "impactOnScore": 4,
-      "nextAction": "Instalar 1.0.12, excluir a captura pendente, recapturar o mesmo link e verificar se a aba Shopee abre/fecha em menos de 35 s e retorna o preço correto."
+      "nextAction": "Instalar 1.0.13 e recapturar; confirmar que o app registra R$ 49,99 e não frete."
     }
   ],
   "testSummary": {
-    "workflowRun": 31554230193,
-    "commit": "981fccf64f4199b6dcaea2ec00ada803314a2919",
+    "workflowRun": 31554868509,
+    "commit": "ba40df1cc37d8d04e5bc7d0fb278a361c96dd0ec",
     "ciStatus": "PASS",
     "automatedTests": {
-      "passed": 14,
+      "passed": 15,
       "failed": 0,
-      "total": 14
+      "total": 15
     },
     "typeScript": "PASS",
     "build": "PASS",
@@ -527,6 +545,16 @@
       "event": "CI_PASSED",
       "run": 31554230193,
       "result": "TypeScript, 14/14 testes, build e audit crítico PASS."
+    },
+    {
+      "event": "REAL_SHOPEE_V1_0_12",
+      "result": "Página abriu e mostrou faixa R$ 49,99 - R$ 79,99, porém app permaneceu sem preço.",
+      "decision": "Criar 1.0.13 com contexto local e reconhecimento de faixa."
+    },
+    {
+      "event": "CI_PASSED",
+      "run": 31554868509,
+      "result": "TypeScript, 15/15 testes, build e audit crítico PASS."
     }
   ]
 }

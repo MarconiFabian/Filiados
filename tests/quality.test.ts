@@ -89,7 +89,7 @@ test('regressão: fallback da extensão nunca escolhe o menor preço do escopo',
   const background = await readFile('chrome-extension/background.js', 'utf8');
   assert.doesNotMatch(background, /Math\.min\(\.\.\.scopedPrices\)/);
   assert.match(background, /frete\|envio\|entrega\|parcela/);
-  assert.match(background, /fontSize \* 20/);
+  assert.match(background, /fontSize \* 40/);
 });
 
 test('captura Shopee usa a API autenticada da aba e valida a identidade do produto', async () => {
@@ -122,24 +122,38 @@ test('captura Shopee termina antes do timeout do aplicativo', async () => {
   assert.match(app, /icon: '⚠️'/);
 });
 
+test('captura visual aceita faixa de preço sem herdar o bloco distante de frete', async () => {
+  const background = await readFile('chrome-extension/background.js', 'utf8');
+  assert.match(background, /const visiblePrices = pricesFromText\(ownText\)/);
+  assert.match(background, /parentText\.length <= 160 \? parentText : ''/);
+  assert.match(background, /const localContext = \[/);
+  assert.match(background, /fontSize \* 40/);
+  assert.match(background, /rangeBonus/);
+  assert.doesNotMatch(background, /node\.parentElement\?\.innerText \|\| '',\n\s*\]\.join/);
+
+  const mainPriceScore = (30 * 40) + 80 - (70 / 20);
+  const freightScore = (14 * 40) - (150 / 20);
+  assert.ok(mainPriceScore > freightScore);
+});
+
 test('app, fonte e pacote baixável usam a mesma versão da extensão', async () => {
   const [app, manifestText, archiveText] = await Promise.all([
     readFile('src/App.tsx', 'utf8'),
     readFile('chrome-extension/manifest.json', 'utf8'),
-    readFile('public/ml-afiliados-sender-v1.0.12.zip.b64', 'utf8'),
+    readFile('public/ml-afiliados-sender-v1.0.13.zip.b64', 'utf8'),
   ]);
   const manifest = JSON.parse(manifestText);
   const zip = Buffer.from(archiveText.replace(/\s+/g, ''), 'base64');
   const packagedManifest = JSON.parse(extractStoredEntry(zip, 'manifest.json'));
 
-  assert.equal(manifest.version, '1.0.12');
+  assert.equal(manifest.version, '1.0.13');
   assert.equal(packagedManifest.version, manifest.version);
-  assert.match(app, /REQUIRED_EXTENSION_VERSION = '1\.0\.12'/);
-  assert.match(app, /ml-afiliados-sender-v1\.0\.12\.zip\.b64/);
+  assert.match(app, /REQUIRED_EXTENSION_VERSION = '1\.0\.13'/);
+  assert.match(app, /ml-afiliados-sender-v1\.0\.13\.zip\.b64/);
 });
 
 test('pacote mantém a proteção persistente contra anúncios duplicados', async () => {
-  const archiveText = await readFile('public/ml-afiliados-sender-v1.0.12.zip.b64', 'utf8');
+  const archiveText = await readFile('public/ml-afiliados-sender-v1.0.13.zip.b64', 'utf8');
   const background = extractStoredEntry(Buffer.from(archiveText.replace(/\s+/g, ''), 'base64'), 'background.js');
   const whatsapp = extractStoredEntry(Buffer.from(archiveText.replace(/\s+/g, ''), 'base64'), 'whatsapp.js');
 
