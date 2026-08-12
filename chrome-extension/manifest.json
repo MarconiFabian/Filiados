@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ML Afiliados Sender",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Recebe a fila do Afiliados Pro, valida preços e envia anúncios com proteção contra duplicidade no WhatsApp Web.",
   "permissions": [
     "storage",
@@ -53,6 +53,28 @@
         "whatsapp.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://shopee.com.br/*",
+        "https://*.shopee.com.br/*"
+      ],
+      "js": [
+        "shopee-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://shopee.com.br/*",
+        "https://*.shopee.com.br/*"
+      ],
+      "js": [
+        "shopee-bridge.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED"
     }
   ],
   "minimum_chrome_version": "121"
