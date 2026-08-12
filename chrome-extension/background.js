@@ -348,6 +348,7 @@ async function captureShopeeApiFromTab(tabId) {
             credentials: 'include',
             cache: 'no-store',
             headers,
+            signal: AbortSignal.timeout(7_000),
           });
           if (!response.ok || [401, 403, 418, 429].includes(response.status)) continue;
           if (!String(response.headers.get('content-type') || '').toLowerCase().includes('json')) continue;
@@ -359,8 +360,7 @@ async function captureShopeeApiFromTab(tabId) {
 
           const responseShopId = String(item.shopid ?? item.shop_id ?? item.shop?.shopid ?? item.shop?.shop_id ?? '');
           const responseItemId = String(item.itemid ?? item.item_id ?? '');
-          if (responseShopId && responseShopId !== ids.shopId) continue;
-          if (responseItemId && responseItemId !== ids.itemId) continue;
+          if (responseShopId !== ids.shopId || responseItemId !== ids.itemId) continue;
           const currency = String(item.currency || data.currency || '').toUpperCase();
           if (currency && currency !== 'BRL') continue;
 
