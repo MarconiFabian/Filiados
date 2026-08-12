@@ -209,7 +209,7 @@ interface DeliveryHistoryEntry {
   timestamp: number;
 }
 
-const REQUIRED_EXTENSION_VERSION = '1.0.13';
+const REQUIRED_EXTENSION_VERSION = '1.0.14';
 const STORAGE_KEY = 'ml_afiliados_v1';
 
 enum OperationType {
@@ -270,6 +270,11 @@ type ShopeeExtensionCapture = {
 
 function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture> {
   return new Promise((resolve, reject) => {
+    const allowedHosts = new Set(['filiados-phi.vercel.app', 'ml-afiliados-pro.vercel.app', 'localhost', '127.0.0.1']);
+    if (!allowedHosts.has(window.location.hostname)) {
+      reject(new Error('Abra o aplicativo oficial em https://filiados-phi.vercel.app/ para usar a extensão.'));
+      return;
+    }
     const requestId = `shopee-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     let started = false;
 
@@ -297,7 +302,7 @@ function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture
     const startupTimeout = window.setTimeout(() => {
       if (started) return;
       cleanup();
-      reject(new Error('Atualize a extensão ML Afiliados Sender para a versão 1.0.13.'));
+      reject(new Error('Atualize a extensão ML Afiliados Sender para a versão 1.0.14.'));
     }, 2_500);
     const captureTimeout = window.setTimeout(() => {
       cleanup();
@@ -316,7 +321,7 @@ function captureShopeeWithExtension(url: string): Promise<ShopeeExtensionCapture
 
 async function downloadExtensionArchive() {
   try {
-    const response = await fetch('/ml-afiliados-sender-v1.0.13.zip.b64', { cache: 'no-store' });
+    const response = await fetch('/ml-afiliados-sender-v1.0.14.zip.b64', { cache: 'no-store' });
     if (!response.ok) throw new Error(`Download respondeu HTTP ${response.status}.`);
     const encoded = (await response.text()).replace(/\s+/g, '');
     const binary = window.atob(encoded);
@@ -326,7 +331,7 @@ async function downloadExtensionArchive() {
     const objectUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
     const anchor = document.createElement('a');
     anchor.href = objectUrl;
-    anchor.download = 'ml-afiliados-sender-v1.0.13.zip';
+    anchor.download = 'ml-afiliados-sender-v1.0.14.zip';
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
@@ -2228,7 +2233,7 @@ export default function App() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-[11px] font-black uppercase tracking-wider text-emerald-900">Extensão ML Afiliados Sender</p>
-                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.13 para Google Chrome</p>
+                  <p className="mt-1 text-[10px] font-bold text-emerald-700">Versão 1.0.14 para Google Chrome</p>
                 </div>
                 <button
                   type="button"
@@ -2250,7 +2255,7 @@ export default function App() {
                   <li>Ative o <b>Modo do desenvolvedor</b> no canto superior direito.</li>
                   <li>Clique em <b>Carregar sem compactação</b>.</li>
                   <li>Selecione a pasta extraída que contém o arquivo <b>manifest.json</b>.</li>
-                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.13</b> e deixe a extensão ativada.</li>
+                  <li>Confirme que aparece <b>ML Afiliados Sender — versão 1.0.14</b> e deixe a extensão ativada.</li>
                   <li>Fixe a extensão no ícone de quebra-cabeça do Chrome e abra o WhatsApp Web.</li>
                 </ol>
                 <p className="mt-3 rounded-lg bg-amber-50 p-2 text-[9px] font-bold text-amber-800">
