@@ -99,6 +99,8 @@ test('captura Shopee usa a API autenticada da aba e valida a identidade do produ
   assert.match(background, /credentials: 'include'/);
   assert.match(background, /responseShopId/);
   assert.match(background, /responseItemId/);
+  assert.match(background, /responseShopId !== ids\.shopId \|\| responseItemId !== ids\.itemId/);
+  assert.match(background, /AbortSignal\.timeout\(7_000\)/);
   assert.match(background, /source: 'shopee-api-tab'/);
   assert.doesNotMatch(background, /source\.match\(\/"price"/);
   assert.match(background, /frete\|envio\|entrega\|parcela\|cupom\|cashback/);
