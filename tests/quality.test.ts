@@ -89,7 +89,7 @@ test('regressão: fallback da extensão nunca escolhe o menor preço do escopo',
   const background = await readFile('chrome-extension/background.js', 'utf8');
   assert.doesNotMatch(background, /Math\.min\(\.\.\.scopedPrices\)/);
   assert.match(background, /frete\|envio\|entrega\|parcela/);
-  assert.match(background, /fontSize \* 20/);
+  assert.match(background, /fontSize \* 40/);
 });
 
 test('captura Shopee usa a API autenticada da aba e valida a identidade do produto', async () => {
