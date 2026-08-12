@@ -887,9 +887,9 @@ export default function App() {
         setInputUrl('');
         if (requiresManualPrice) {
           setSelectedProductId(createdProductId);
-          toast.warning(shopeeCaptureWarning
+          toast(shopeeCaptureWarning
             ? `${marketplace.name}: preço pendente. ${shopeeCaptureWarning}`
-            : `${marketplace.name}: título e foto adicionados. Informe o preço no editor antes de enviar.`, { duration: 7000 });
+            : `${marketplace.name}: título e foto adicionados. Informe o preço no editor antes de enviar.`, { duration: 7000, icon: '⚠️' });
         } else {
           toast.success(`${marketplace.name}: produto adicionado à fila.`);
         }
