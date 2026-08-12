@@ -134,7 +134,7 @@ test('persistência usa IDs determinísticos e regras Firestore estritas', async
   assert.match(rules, /data\.marketplace in \[/);
 });
 
-test('deploy é determinístico e Firebase não depende de hostname fixo', async () => {
+test('deploy é determinístico e Firebase usa authDomain oficial estável', async () => {
   const [vercelText, firebase] = await Promise.all([
     readFile('vercel.json', 'utf8'),
     readFile('src/lib/firebase.ts', 'utf8'),
@@ -142,7 +142,9 @@ test('deploy é determinístico e Firebase não depende de hostname fixo', async
   const vercel = JSON.parse(vercelText);
   assert.equal(vercel.buildCommand, 'npm ci && npm run build');
   assert.doesNotMatch(firebase, /isProductionHost/);
-  assert.match(firebase, /VITE_FIREBASE_AUTH_DOMAIN/);
+  assert.match(firebase, /gen-lang-client-0772285066\\.firebaseapp\\.com/);
+  assert.doesNotMatch(firebase, /VITE_FIREBASE_AUTH_DOMAIN/);
+  assert.doesNotMatch(firebase, /filiados-phi\\.vercel\\.app/);
 });
 
 test('extensão permite imagens somente em hosts oficiais dos marketplaces', async () => {
