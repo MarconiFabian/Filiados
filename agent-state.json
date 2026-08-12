@@ -4,14 +4,14 @@
     "name": "Afiliados Pro",
     "repository": "MarconiFabian/Filiados",
     "version": "3.0.0",
-    "extensionVersion": "1.0.13",
-    "branch": "codex/shopee-visible-range-v1013-20260811",
+    "extensionVersion": "1.0.14",
+    "branch": "codex/shopee-passive-price-v1014-20260812",
     "environment": "pull-request",
-    "commitUnderTest": "ba40df1cc37d8d04e5bc7d0fb278a361c96dd0ec"
+    "commitUnderTest": "6785dd50256a6fe514a53fb4474d74df9b5d2cec"
   },
-  "iteration": 4,
+  "iteration": 5,
   "status": "IN_PROGRESS",
-  "updatedAt": "2026-08-11T23:02:00-03:00",
+  "updatedAt": "2026-08-12T06:40:00-03:00",
   "marketplaces": [
     "mercado-livre",
     "amazon",
@@ -61,9 +61,9 @@
       "ownerAgent": "MARKETPLACE_AGENT",
       "iterationCreated": 1,
       "rootCause": "A heurística antiga podia escolher o menor valor do escopo, inclusive frete. A versão 1.0.10 passou a falhar com segurança, mas não obteve o preço quando a Shopee bloqueou/alterou o HTML.",
-      "fix": "A extensão 1.0.13 limita o filtro de frete ao contexto local, reconhece faixas de preço visíveis e pontua tamanho/distância, evitando que a palavra Frete de um ancestral amplo descarte o preço principal.",
-      "test": "tests/quality.test.ts - faixa visível, contexto local, peso visual, frete e consistência do ZIP",
-      "evidence": "Quality Gate run 31554868509 PASS: TypeScript, 15/15 testes, build e audit crítico. Recaptura real com 1.0.13 pendente.",
+      "fix": "A extensão 1.0.14 observa passivamente em document_start as respostas fetch/XHR da própria página Shopee, entende schemas moderno e legado, valida IDs no service worker e usa DOM/API direta apenas como fallback.",
+      "test": "tests/quality.test.ts - execução real do observador em VM com range_min/range_max, rejeição de IDs divergentes, manifest MAIN/document_start e pacote",
+      "evidence": "Quality Gate run 31583345957 PASS: TypeScript, 18/18 testes, build e audit crítico. Preview Vercel PASS. Teste real com extensão 1.0.14 pendente.",
       "iterationClosed": null
     },
     {
@@ -351,6 +351,14 @@
       "verdict": "REJECTED",
       "commit": "ba40df1cc37d8d04e5bc7d0fb278a361c96dd0ec",
       "note": "CI 15/15 passou. Score não foi elevado antes da recaptura real."
+    },
+    {
+      "iteration": 5,
+      "phase": "CI",
+      "score": 73,
+      "verdict": "REJECTED",
+      "commit": "6785dd50256a6fe514a53fb4474d74df9b5d2cec",
+      "note": "CI 18/18 passou com execução do observador moderno. Score permanece até E2E real."
     }
   ],
   "changes": [
@@ -409,6 +417,18 @@
     {
       "iteration": 4,
       "description": "Extensão 1.0.13 reconhece faixa de preço Shopee e isola o contexto local do valor."
+    },
+    {
+      "iteration": 5,
+      "description": "Extensão 1.0.14 intercepta passivamente fetch/XHR da própria página Shopee em MAIN/document_start."
+    },
+    {
+      "iteration": 5,
+      "description": "Parser suporta product_price.price.single_value e range_min/range_max, além do schema legado."
+    },
+    {
+      "iteration": 5,
+      "description": "Aplicativo bloqueia preview não autorizado com mensagem para usar o domínio oficial."
     }
   ],
   "decisions": [
@@ -453,6 +473,12 @@
       "iteration": 4,
       "decision": "Não usar o texto completo do ancestral para classificar frete.",
       "reason": "A captura real mostrou preço principal e frete no mesmo painel; o ancestral amplo provocava falso positivo."
+    },
+    {
+      "id": "DEC-008",
+      "iteration": 5,
+      "decision": "Substituir segunda requisição como caminho principal pela observação passiva da resposta da página.",
+      "reason": "Pesquisa multiagente identificou tokens anti-bot e schema moderno; reutilizar a resposta já obtida é mais rápido e não envia cookies."
     }
   ],
   "blockedItems": [
@@ -477,29 +503,29 @@
     {
       "id": "BLOCK-003",
       "issueId": "AFF-SHOPEE-001",
-      "dependency": "Página real Shopee com faixa R$ 49,99 - R$ 79,99 e extensão 1.0.13.",
-      "attempts": 3,
+      "dependency": "Página real Shopee no domínio oficial do app, com extensão 1.0.14.",
+      "attempts": 4,
       "status": "PENDING_REAL_BROWSER",
       "impactOnScore": 4,
-      "nextAction": "Instalar 1.0.13 e recapturar; confirmar que o app registra R$ 49,99 e não frete."
+      "nextAction": "Instalar 1.0.14 e recapturar no app oficial; confirmar retorno 49,99–79,99 sem segunda chamada lenta."
     }
   ],
   "testSummary": {
-    "workflowRun": 31554868509,
-    "commit": "ba40df1cc37d8d04e5bc7d0fb278a361c96dd0ec",
+    "workflowRun": 31583345957,
+    "commit": "6785dd50256a6fe514a53fb4474d74df9b5d2cec",
     "ciStatus": "PASS",
     "automatedTests": {
-      "passed": 15,
+      "passed": 18,
       "failed": 0,
-      "total": 15
+      "total": 18
     },
     "typeScript": "PASS",
     "build": "PASS",
     "criticalAudit": "PASS",
     "criticalGateTests": {
-      "passed": 6,
-      "total": 8,
-      "percent": 75
+      "passed": 7,
+      "total": 9,
+      "percent": 77.78
     }
   },
   "auditTrail": [
@@ -555,6 +581,21 @@
       "event": "CI_PASSED",
       "run": 31554868509,
       "result": "TypeScript, 15/15 testes, build e audit crítico PASS."
+    },
+    {
+      "event": "REAL_SHOPEE_V1_0_13",
+      "result": "No domínio oficial, a página abriu mas o app continuou em Preço pendente.",
+      "decision": "Abandonar heurística como caminho principal e implementar observação passiva."
+    },
+    {
+      "event": "MULTI_AGENT_RESEARCH",
+      "result": "Recomendação: API oficial com credenciais ou interceptação passiva get_pc; schema moderno product_price.price.",
+      "decision": "Implementar interceptação passiva sem credenciais na 1.0.14."
+    },
+    {
+      "event": "CI_PASSED",
+      "run": 31583345957,
+      "result": "TypeScript, 18/18 testes, build e audit crítico PASS."
     }
   ]
 }
