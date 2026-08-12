@@ -142,9 +142,9 @@ test('deploy é determinístico e Firebase usa authDomain oficial estável', asy
   const vercel = JSON.parse(vercelText);
   assert.equal(vercel.buildCommand, 'npm ci && npm run build');
   assert.doesNotMatch(firebase, /isProductionHost/);
-  assert.match(firebase, /gen-lang-client-0772285066\\.firebaseapp\\.com/);
+  assert.match(firebase, /gen-lang-client-0772285066\.firebaseapp\.com/);
   assert.doesNotMatch(firebase, /VITE_FIREBASE_AUTH_DOMAIN/);
-  assert.doesNotMatch(firebase, /filiados-phi\\.vercel\\.app/);
+  assert.doesNotMatch(firebase, /filiados-phi\.vercel\.app/);
 });
 
 test('extensão permite imagens somente em hosts oficiais dos marketplaces', async () => {
