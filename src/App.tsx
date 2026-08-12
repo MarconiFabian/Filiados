@@ -1489,7 +1489,7 @@ export default function App() {
             <div role="alert" className="rounded-2xl border border-red-200 bg-red-50 p-4 text-left text-sm font-bold text-red-700">
               <p>{loginError}</p>
               {loginError.includes('não está autorizado') && (
-                <p className="mt-2 text-xs font-medium text-red-600">Firebase Console → Authentication → Settings → Authorized domains → adicione ml-afiliados-pro.vercel.app</p>
+                <p className="mt-2 text-xs font-medium text-red-600">Firebase Console → Authentication → Settings → Authorized domains → adicione {window.location.hostname}</p>
               )}
             </div>
           )}
