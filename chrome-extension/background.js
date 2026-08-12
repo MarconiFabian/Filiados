@@ -42,6 +42,67 @@ function isAllowedShopeeUrl(value) {
   }
 }
 
+function shopeeIdsFromUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    const path = decodeURIComponent(url.pathname);
+    const route = path.match(/\/(?:product|opaanlp)\/(\d+)\/(\d+)(?:\/|$)/i);
+    const slug = path.match(/(?:^|[-/])i\.(\d+)\.(\d+)(?:\/|$)/i);
+    const shopId = route?.[1] || slug?.[1] || url.searchParams.get('shop_id') || url.searchParams.get('shopid') || '';
+    const itemId = route?.[2] || slug?.[2] || url.searchParams.get('item_id') || url.searchParams.get('itemid') || '';
+    return /^\d+$/.test(shopId) && /^\d+$/.test(itemId) ? { shopId, itemId } : null;
+  } catch {
+    return null;
+  }
+}
+
+function isAllowedShopeePage(sender) {
+  return Boolean(sender?.tab?.id && isAllowedShopeeUrl(sender?.tab?.url || sender?.url || ''));
+}
+
+const shopeePageCaptures = new Map();
+
+function sanitizeShopeePageCapture(message, sender) {
+  if (!isAllowedShopeePage(sender)) throw new Error('Origem Shopee não autorizada.');
+  const payload = message?.payload;
+  if (!payload || payload.source !== 'shopee-page-response') throw new Error('Resposta Shopee inválida.');
+  const pageIds = shopeeIdsFromUrl(sender.tab.url);
+  const shopId = String(payload.shopId || '');
+  const itemId = String(payload.itemId || '');
+  if (!pageIds || pageIds.shopId !== shopId || pageIds.itemId !== itemId) {
+    throw new Error('A resposta recebida não pertence ao produto aberto.');
+  }
+  const price = Number(payload.price);
+  const priceMax = Number(payload.priceMax);
+  const originalPrice = Number(payload.originalPrice);
+  if (!Number.isFinite(price) || price <= 0 || price > 1000000) throw new Error('Preço Shopee inválido.');
+
+  return {
+    ok: true,
+    source: 'shopee-page-response',
+    confidence: 'high',
+    shopId,
+    itemId,
+    modelId: payload.modelId ? String(payload.modelId).slice(0, 40) : null,
+    price,
+    priceMax: Number.isFinite(priceMax) && priceMax >= price && priceMax <= 1000000 ? priceMax : null,
+    originalPrice: Number.isFinite(originalPrice) && originalPrice > price && originalPrice <= 1000000 ? originalPrice : null,
+    title: String(payload.title || '').trim().slice(0, 300),
+    image: String(payload.image || '').trim().slice(0, 2000),
+    capturedAt: Number(payload.capturedAt) || Date.now(),
+  };
+}
+
+async function waitForShopeePageCapture(tabId, timeoutMs = 12_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const cached = shopeePageCaptures.get(tabId);
+    if (cached && cached.expiresAt > Date.now()) return cached.product;
+    await sleep(100);
+  }
+  return null;
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const SENT_HISTORY_KEY = 'mlSentHistoryV2';
@@ -414,13 +475,13 @@ async function captureShopeeProduct(url) {
     const tab = await chrome.tabs.create({ url, active: true });
     tabId = tab.id;
     if (!tabId) throw new Error('Não foi possível abrir a página da Shopee.');
-    await waitForTabComplete(tabId, 12_000).catch(() => chrome.tabs.get(tabId));
-    await sleep(600);
+    const pageResponseProduct = await waitForShopeePageCapture(tabId, 12_000);
+    if (pageResponseProduct?.price) return pageResponseProduct;
 
-    const apiProduct = await captureShopeeApiFromTab(tabId);
-    if (apiProduct?.ok && apiProduct.price) return apiProduct;
+    await waitForTabComplete(tabId, 5_000).catch(() => chrome.tabs.get(tabId));
+    await sleep(250);
 
-    for (let attempt = 0; attempt < 8; attempt++) {
+    for (let attempt = 0; attempt < 4; attempt++) {
       const [injection] = await chrome.scripting.executeScript({
         target: { tabId },
         world: 'ISOLATED',
@@ -463,9 +524,11 @@ async function captureShopeeProduct(url) {
             '[class*="price-before-discount"]',
           ]);
 
-          if (price === null && titleNode) {
+          if (price === null) {
             const pricePattern = /R\$\s*[0-9]{1,3}(?:\.[0-9]{3})*,[0-9]{2}/;
-            const titleRect = titleNode.getBoundingClientRect();
+            const titleRect = titleNode?.getBoundingClientRect();
+            const anchorTop = titleRect?.top ?? 100;
+            const anchorBottom = titleRect?.bottom ?? 360;
             const candidates = [];
 
             for (const node of document.querySelectorAll('span, div')) {
@@ -494,9 +557,9 @@ async function captureShopeeProduct(url) {
               const fontSize = Number.parseFloat(style.fontSize) || 0;
               const rect = node.getBoundingClientRect();
               if (!rect.width || !rect.height) continue;
-              if (rect.top < titleRect.top - 40 || rect.top > titleRect.bottom + 450) continue;
+              if (rect.top < anchorTop - 80 || rect.top > anchorBottom + 500) continue;
 
-              const verticalDistance = Math.abs(rect.top - titleRect.bottom);
+              const verticalDistance = Math.abs(rect.top - anchorBottom);
               const rangeBonus = visiblePrices.length > 1 && /\s[-–]\s/.test(ownText) ? 80 : 0;
               const score = (struck ? -1000 : 0) + (fontSize * 40) + rangeBonus - Math.min(verticalDistance, 3000) / 20;
               candidates.push({ value: candidate, struck, score });
@@ -544,17 +607,32 @@ async function captureShopeeProduct(url) {
       });
       const product = injection?.result;
       if (product?.price) return product;
-      await sleep(450);
+      await sleep(350);
     }
+
+    const apiProduct = await captureShopeeApiFromTab(tabId);
+    if (apiProduct?.ok && apiProduct.price) return apiProduct;
     throw new Error('O preço não apareceu na página da Shopee.');
   } finally {
     if (tabId) {
+      shopeePageCaptures.delete(tabId);
       try { await chrome.tabs.remove(tabId); } catch {}
     }
   }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'ML_SHOPEE_PDP_CAPTURED') {
+    try {
+      const product = sanitizeShopeePageCapture(message, sender);
+      shopeePageCaptures.set(sender.tab.id, { product, expiresAt: Date.now() + 30_000 });
+      sendResponse({ ok: true });
+    } catch (error) {
+      sendResponse({ ok: false, error: error?.message || String(error) });
+    }
+    return;
+  }
+
   if (message?.type === 'ML_GET_DIAGNOSTICS' || message?.type === 'ML_GET_SEND_HISTORY' || message?.type === 'ML_CLEAR_SEND_HISTORY') {
     (async () => {
       try {
