@@ -470,28 +470,35 @@ async function captureShopeeProduct(url) {
 
             for (const node of document.querySelectorAll('span, div')) {
               const ownText = String(node.textContent || '').replace(/\s+/g, ' ').trim();
-              if (ownText.length > 70 || !pricePattern.test(ownText)) continue;
-              if ([...node.children].some((child) => pricePattern.test(String(child.textContent || '')))) continue;
+              const visiblePrices = pricesFromText(ownText);
+              if (ownText.length > 140 || visiblePrices.length === 0) continue;
 
-              const candidate = parsePrice(ownText);
-              if (candidate === null) continue;
-
-              const nearContext = [
+              const candidate = visiblePrices[0];
+              const parentText = String(node.parentElement?.innerText || '').replace(/\s+/g, ' ').trim();
+              const previousText = String(node.previousElementSibling?.textContent || '').replace(/\s+/g, ' ').trim();
+              const nextText = String(node.nextElementSibling?.textContent || '').replace(/\s+/g, ' ').trim();
+              const localContext = [
                 node.getAttribute?.('aria-label') || '',
-                node.parentElement?.innerText || '',
+                ownText,
+                parentText.length <= 160 ? parentText : '',
+                previousText.length <= 60 ? previousText : '',
+                nextText.length <= 60 ? nextText : '',
               ].join(' ').replace(/\s+/g, ' ').trim();
 
-              // Frete, parcelas e entrega não são o preço principal do produto.
-              if (/(?:frete|envio|entrega|parcela|cashback|cupom|\d+\s*x\s*R\$)/i.test(nearContext)) continue;
+              // Analisa somente o contexto local. Um ancestral grande contém também
+              // o bloco de frete e fazia o preço principal ser descartado.
+              if (/(?:frete|envio|entrega|parcela|cashback|cupom|\d+\s*x\s*R\$)/i.test(localContext)) continue;
 
               const style = getComputedStyle(node);
               const struck = /line-through/i.test(`${style.textDecorationLine} ${style.textDecoration}`);
               const fontSize = Number.parseFloat(style.fontSize) || 0;
               const rect = node.getBoundingClientRect();
               if (!rect.width || !rect.height) continue;
+              if (rect.top < titleRect.top - 40 || rect.top > titleRect.bottom + 450) continue;
 
               const verticalDistance = Math.abs(rect.top - titleRect.bottom);
-              const score = (struck ? -1000 : 0) + (fontSize * 20) - Math.min(verticalDistance, 3000) / 100;
+              const rangeBonus = visiblePrices.length > 1 && /\s[-–]\s/.test(ownText) ? 80 : 0;
+              const score = (struck ? -1000 : 0) + (fontSize * 40) + rangeBonus - Math.min(verticalDistance, 3000) / 20;
               candidates.push({ value: candidate, struck, score });
             }
 
