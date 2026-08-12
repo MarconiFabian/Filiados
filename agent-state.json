@@ -4,14 +4,14 @@
     "name": "Afiliados Pro",
     "repository": "MarconiFabian/Filiados",
     "version": "3.0.0",
-    "extensionVersion": "1.0.10",
-    "branch": "codex/agentic-quality-iteration-1-20260811",
-    "environment": "quality-iteration",
-    "commitUnderTest": "8ab919a2800d466c49b9c04e1e356a05db9f9004"
+    "extensionVersion": "1.0.11",
+    "branch": "codex/shopee-price-api-hotfix-20260811",
+    "environment": "pull-request",
+    "commitUnderTest": "dce36dc5fd199a092044fd7f58c13d7c919913be"
   },
-  "iteration": 1,
+  "iteration": 2,
   "status": "IN_PROGRESS",
-  "updatedAt": "2026-08-11T12:00:00-03:00",
+  "updatedAt": "2026-08-11T22:25:00-03:00",
   "marketplaces": [
     "mercado-livre",
     "amazon",
@@ -20,7 +20,7 @@
   ],
   "qualityGate": {
     "verdict": "REJECTED",
-    "judge": "AGENT_10_INDEPENDENT",
+    "judge": "PENDING_ITERATION_2_INDEPENDENT_REVIEW",
     "requiredScore": 90,
     "currentScore": 73,
     "provisional": false,
@@ -57,13 +57,14 @@
       "severity": "P0",
       "component": "Chrome extension",
       "file": "chrome-extension/background.js",
-      "status": "FIXED_AUTOMATED_PENDING_REAL_E2E",
+      "status": "FIXED_VERIFIED_CI_PENDING_REAL_E2E",
       "ownerAgent": "MARKETPLACE_AGENT",
       "iterationCreated": 1,
-      "rootCause": "Fallback usava Math.min sobre todos os valores próximos ao título.",
-      "fix": "Remover seleção pelo menor valor, rejeitar contexto de frete/envio/entrega/parcelas e ranquear preços visíveis.",
-      "test": "tests/quality.test.ts - regressão de preço/frete",
-      "evidence": "Caso real: produto R$ 33,90 era salvo como frete R$ 9,62; fixture automatizada agora exige produto 33,90 e rejeita frete 9,62."
+      "rootCause": "A heurística antiga podia escolher o menor valor do escopo, inclusive frete. A versão 1.0.10 passou a falhar com segurança, mas não obteve o preço quando a Shopee bloqueou/alterou o HTML.",
+      "fix": "A extensão 1.0.11 consulta a API da Shopee dentro da própria aba com credenciais locais, valida shopId/itemId e moeda, usa apenas campos explícitos de produto/modelo e mantém Preço pendente em respostas ambíguas.",
+      "test": "tests/quality.test.ts - API autenticada na aba, identidade exata, timeout, regressão de frete e consistência do ZIP",
+      "evidence": "Quality Gate run 31553194133 PASS: TypeScript, 13/13 testes, build e audit crítico. Teste real do link 2gAFhInhqM com a versão 1.0.11 ainda pendente.",
+      "iterationClosed": null
     },
     {
       "id": "ARCH-001",
@@ -226,16 +227,16 @@
       "command": "npm run lint",
       "status": "PASS",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31545907589"
+      "evidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-UNIT-001",
       "level": 2,
-      "name": "Preço Shopee API e URL segura",
+      "name": "Preço Shopee via API autenticada da aba, IDs exatos e URL segura",
       "command": "npm test",
       "status": "PASS",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31545907589"
+      "evidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-REG-001",
@@ -244,7 +245,7 @@
       "command": "npm test",
       "status": "PASS",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31545907589"
+      "evidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-REG-002",
@@ -253,7 +254,7 @@
       "command": "npm test",
       "status": "PASS",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31545907589"
+      "evidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-REG-003",
@@ -262,7 +263,7 @@
       "command": "npm test",
       "status": "PASS",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31545907589"
+      "evidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-BUILD-001",
@@ -271,7 +272,7 @@
       "command": "npm run build",
       "status": "PASS",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31545907589"
+      "evidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-E2E-001",
@@ -326,6 +327,14 @@
       "verdict": "REJECTED",
       "commit": "8ab919a2800d466c49b9c04e1e356a05db9f9004",
       "note": "CI passou; E2E real, Shopee real e tracking dos quatro marketplaces pendentes."
+    },
+    {
+      "iteration": 2,
+      "phase": "CI",
+      "score": 73,
+      "verdict": "REJECTED",
+      "commit": "dce36dc5fd199a092044fd7f58c13d7c919913be",
+      "note": "Score mantido no último valor confirmado pelo juiz. CI 13/13 passou; preço Shopee real, E2E WhatsApp e tracking ainda pendentes."
     }
   ],
   "changes": [
@@ -360,6 +369,18 @@
     {
       "iteration": 1,
       "description": "CSP endurecida, build determinístico com npm ci e domínio Firebase corrigido."
+    },
+    {
+      "iteration": 2,
+      "description": "Extensão 1.0.11 captura preço Shopee via API executada no contexto autenticado da aba e não envia cookies à Vercel."
+    },
+    {
+      "iteration": 2,
+      "description": "Resposta Shopee exige shopId/itemId exatos, moeda BRL, timeout e campos monetários explícitos; falhas permanecem como Preço pendente."
+    },
+    {
+      "iteration": 2,
+      "description": "Pacote baixável 1.0.11 sincronizado e validado por 13 testes automatizados."
     }
   ],
   "decisions": [
@@ -386,6 +407,12 @@
       "iteration": 1,
       "decision": "Não afirmar sucesso absoluto da trava de duplicidade apenas com testes estáticos/automatizados.",
       "reason": "O fluxo real com Chrome, extensão e WhatsApp ainda precisa de evidência controlada."
+    },
+    {
+      "id": "DEC-005",
+      "iteration": 2,
+      "decision": "Não aprovar o fluxo Shopee apenas pelo CI; exigir recaptura do link real com a extensão 1.0.11.",
+      "reason": "O teste da versão 1.0.10 falhou com segurança em Preço pendente, e a API privada da Shopee pode variar por sessão, CEP e proteção anti-bot."
     }
   ],
   "blockedItems": [
@@ -401,7 +428,7 @@
     {
       "id": "BLOCK-002",
       "issueId": "TEST-E2E-001",
-      "dependency": "Chrome com a extensão 1.0.10 carregada e sessão real do WhatsApp Web.",
+      "dependency": "Chrome com a extensão 1.0.11 carregada e sessão real do WhatsApp Web.",
       "attempts": 0,
       "status": "PENDING_REAL_BROWSER",
       "impactOnScore": 7,
@@ -410,21 +437,21 @@
     {
       "id": "BLOCK-003",
       "issueId": "AFF-SHOPEE-001",
-      "dependency": "Página real do produto Shopee fornecido, com extensão 1.0.10.",
-      "attempts": 0,
+      "dependency": "Página real do produto Shopee fornecido, com extensão 1.0.11.",
+      "attempts": 1,
       "status": "PENDING_REAL_BROWSER",
       "impactOnScore": 4,
-      "nextAction": "Confirmar que o produto retorna R$ 33,90 e nunca o frete R$ 9,62."
+      "nextAction": "Instalar a extensão 1.0.11, excluir a captura antiga, recapturar https://s.shopee.com.br/2gAFhInhqM e confirmar o preço do produto (nunca frete R$ 9,62 nem Preço pendente)."
     }
   ],
   "testSummary": {
-    "workflowRun": 31545907589,
-    "commit": "8ab919a2800d466c49b9c04e1e356a05db9f9004",
+    "workflowRun": 31553194133,
+    "commit": "dce36dc5fd199a092044fd7f58c13d7c919913be",
     "ciStatus": "PASS",
     "automatedTests": {
-      "passed": 12,
+      "passed": 13,
       "failed": 0,
-      "total": 12
+      "total": 13
     },
     "typeScript": "PASS",
     "build": "PASS",
@@ -452,6 +479,22 @@
       "commit": "8ab919a2800d466c49b9c04e1e356a05db9f9004",
       "score": 73,
       "verdict": "REJECTED"
+    },
+    {
+      "event": "CI_FAILED",
+      "run": 31553132769,
+      "result": "12/13 testes; build e audit ignorados",
+      "decision": "Corrigir a asserção do filtro de cupom/cashback sem alterar a proteção."
+    },
+    {
+      "event": "CI_PASSED",
+      "run": 31553194133,
+      "result": "TypeScript, 13/13 testes, build e audit crítico PASS."
+    },
+    {
+      "event": "REAL_SHOPEE_V1_0_10",
+      "result": "Preço pendente; frete R$ 9,62 não foi publicado.",
+      "decision": "Criar a extensão 1.0.11 com API autenticada da aba e manter o gate real pendente."
     }
   ]
 }

@@ -92,24 +92,38 @@ test('regressão: fallback da extensão nunca escolhe o menor preço do escopo',
   assert.match(background, /fontSize \* 20/);
 });
 
+test('captura Shopee usa a API autenticada da aba e valida a identidade do produto', async () => {
+  const background = await readFile('chrome-extension/background.js', 'utf8');
+  assert.match(background, /world: 'MAIN'/);
+  assert.match(background, /\/api\/v4\/pdp\/get_pc/);
+  assert.match(background, /credentials: 'include'/);
+  assert.match(background, /responseShopId/);
+  assert.match(background, /responseItemId/);
+  assert.match(background, /responseShopId !== ids\.shopId \|\| responseItemId !== ids\.itemId/);
+  assert.match(background, /AbortSignal\.timeout\(7_000\)/);
+  assert.match(background, /source: 'shopee-api-tab'/);
+  assert.doesNotMatch(background, /source\.match\(\/"price"/);
+  assert.match(background, /frete\|envio\|entrega\|parcela\|cashback\|cupom/);
+});
+
 test('app, fonte e pacote baixável usam a mesma versão da extensão', async () => {
   const [app, manifestText, archiveText] = await Promise.all([
     readFile('src/App.tsx', 'utf8'),
     readFile('chrome-extension/manifest.json', 'utf8'),
-    readFile('public/ml-afiliados-sender-v1.0.10.zip.b64', 'utf8'),
+    readFile('public/ml-afiliados-sender-v1.0.11.zip.b64', 'utf8'),
   ]);
   const manifest = JSON.parse(manifestText);
   const zip = Buffer.from(archiveText.replace(/\s+/g, ''), 'base64');
   const packagedManifest = JSON.parse(extractStoredEntry(zip, 'manifest.json'));
 
-  assert.equal(manifest.version, '1.0.10');
+  assert.equal(manifest.version, '1.0.11');
   assert.equal(packagedManifest.version, manifest.version);
-  assert.match(app, /REQUIRED_EXTENSION_VERSION = '1\.0\.10'/);
-  assert.match(app, /ml-afiliados-sender-v1\.0\.10\.zip\.b64/);
+  assert.match(app, /REQUIRED_EXTENSION_VERSION = '1\.0\.11'/);
+  assert.match(app, /ml-afiliados-sender-v1\.0\.11\.zip\.b64/);
 });
 
 test('pacote mantém a proteção persistente contra anúncios duplicados', async () => {
-  const archiveText = await readFile('public/ml-afiliados-sender-v1.0.10.zip.b64', 'utf8');
+  const archiveText = await readFile('public/ml-afiliados-sender-v1.0.11.zip.b64', 'utf8');
   const background = extractStoredEntry(Buffer.from(archiveText.replace(/\s+/g, ''), 'base64'), 'background.js');
   const whatsapp = extractStoredEntry(Buffer.from(archiveText.replace(/\s+/g, ''), 'base64'), 'whatsapp.js');
 
