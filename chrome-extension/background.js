@@ -270,6 +270,116 @@ async function waitForTabComplete(tabId, timeoutMs = 20_000) {
   });
 }
 
+async function captureShopeeApiFromTab(tabId) {
+  const [injection] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: 'MAIN',
+    func: async () => {
+      const parseIds = (value) => {
+        try {
+          const url = new URL(value, location.href);
+          const pathname = decodeURIComponent(url.pathname);
+          const route = pathname.match(/\/(?:product|opaanlp)\/(\d+)\/(\d+)(?:\/|$)/i);
+          const slug = pathname.match(/(?:^|[-/])i\.(\d+)\.(\d+)(?:\/|$)/i);
+          const shopId = route?.[1] || slug?.[1] || url.searchParams.get('shop_id') || url.searchParams.get('shopid') || '';
+          const itemId = route?.[2] || slug?.[2] || url.searchParams.get('item_id') || url.searchParams.get('itemid') || '';
+          return /^\d+$/.test(shopId) && /^\d+$/.test(itemId) ? { shopId, itemId } : null;
+        } catch {
+          return null;
+        }
+      };
+      const idCandidates = [
+        location.href,
+        document.querySelector('link[rel="canonical"]')?.href,
+        document.querySelector('meta[property="og:url"]')?.content,
+      ].filter(Boolean);
+      const ids = idCandidates.map(parseIds).find(Boolean);
+      if (!ids) return { ok: false, reason: 'product_ids_missing' };
+
+      const money = (value) => {
+        if (typeof value === 'string' && /[.,]/.test(value)) {
+          const normalized = value.replace(/R\$\s*/gi, '').replace(/\s+/g, '').replace(/\./g, '').replace(',', '.');
+          const parsed = Number(normalized);
+          return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+        }
+        const raw = Number(value);
+        if (!Number.isFinite(raw) || raw <= 0) return null;
+        const parsed = Number.isInteger(raw) && raw >= 100000 ? raw / 100000 : raw;
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      };
+      const firstMoney = (values) => {
+        for (const value of values) {
+          const parsed = money(value);
+          if (parsed !== null) return parsed;
+        }
+        return null;
+      };
+      const imageUrl = (value) => {
+        const raw = Array.isArray(value) ? value[0] : value;
+        const image = String(raw || '').trim();
+        if (!image) return '';
+        if (/^https?:\/\//i.test(image)) return image;
+        return 'https://down-br.img.susercontent.com/file/' + image.replace(/^\/+/, '');
+      };
+      const endpoints = [
+        '/api/v4/pdp/get_pc?item_id=' + encodeURIComponent(ids.itemId) + '&shop_id=' + encodeURIComponent(ids.shopId),
+        '/api/v4/item/get?itemid=' + encodeURIComponent(ids.itemId) + '&shopid=' + encodeURIComponent(ids.shopId),
+      ];
+
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(endpoint, {
+            credentials: 'include',
+            cache: 'no-store',
+            headers: {
+              Accept: 'application/json, text/plain, */*',
+              'x-api-source': 'pc',
+              'x-requested-with': 'XMLHttpRequest',
+            },
+          });
+          if (!response.ok) continue;
+          const payload = await response.json();
+          const data = payload?.data || {};
+          const item = data?.item && typeof data.item === 'object' ? data.item : data;
+          if (!item || typeof item !== 'object') continue;
+
+          const models = Array.isArray(item.models) ? item.models : [];
+          const availableModels = models.filter((model) => Number(model?.stock ?? model?.normal_stock ?? 1) > 0);
+          const candidates = availableModels.length ? availableModels : models;
+          const price = firstMoney([
+            item.price,
+            item.price_min,
+            ...candidates.map((model) => model?.price),
+            item.price_max,
+          ]);
+          if (price === null) continue;
+
+          const originalPriceCandidate = firstMoney([
+            item.price_before_discount,
+            item.price_min_before_discount,
+            ...candidates.map((model) => model?.price_before_discount),
+            item.price_max_before_discount,
+          ]);
+          return {
+            ok: true,
+            source: 'shopee_api',
+            price,
+            originalPrice: originalPriceCandidate !== null && originalPriceCandidate > price
+              ? originalPriceCandidate
+              : null,
+            title: String(item.name || '').trim(),
+            image: imageUrl(item.image) || imageUrl(item.images),
+            shopId: ids.shopId,
+            itemId: ids.itemId,
+          };
+        } catch {}
+      }
+      return { ok: false, reason: 'api_price_unavailable', shopId: ids.shopId, itemId: ids.itemId };
+    }
+  });
+  return injection?.result || null;
+}
+
 async function captureShopeeProduct(url) {
   if (!isAllowedShopeeUrl(url)) throw new Error('Link da Shopee inválido.');
   let tabId = null;
@@ -279,6 +389,9 @@ async function captureShopeeProduct(url) {
     if (!tabId) throw new Error('Não foi possível abrir a página da Shopee.');
     await waitForTabComplete(tabId);
     await sleep(1_200);
+
+    const apiProduct = await captureShopeeApiFromTab(tabId);
+    if (apiProduct?.ok && apiProduct.price) return apiProduct;
 
     for (let attempt = 0; attempt < 24; attempt++) {
       const [injection] = await chrome.scripting.executeScript({
