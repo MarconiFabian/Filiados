@@ -4,14 +4,14 @@
     "name": "Afiliados Pro",
     "repository": "MarconiFabian/Filiados",
     "version": "3.0.0",
-    "extensionVersion": "1.0.11",
-    "branch": "codex/shopee-price-api-hotfix-20260811",
+    "extensionVersion": "1.0.12",
+    "branch": "codex/shopee-timeout-hotfix-v1012-20260811",
     "environment": "pull-request",
-    "commitUnderTest": "dce36dc5fd199a092044fd7f58c13d7c919913be"
+    "commitUnderTest": "981fccf64f4199b6dcaea2ec00ada803314a2919"
   },
-  "iteration": 2,
+  "iteration": 3,
   "status": "IN_PROGRESS",
-  "updatedAt": "2026-08-11T22:25:00-03:00",
+  "updatedAt": "2026-08-11T22:45:00-03:00",
   "marketplaces": [
     "mercado-livre",
     "amazon",
@@ -61,9 +61,9 @@
       "ownerAgent": "MARKETPLACE_AGENT",
       "iterationCreated": 1,
       "rootCause": "A heurística antiga podia escolher o menor valor do escopo, inclusive frete. A versão 1.0.10 passou a falhar com segurança, mas não obteve o preço quando a Shopee bloqueou/alterou o HTML.",
-      "fix": "A extensão 1.0.11 consulta a API da Shopee dentro da própria aba com credenciais locais, valida shopId/itemId e moeda, usa apenas campos explícitos de produto/modelo e mantém Preço pendente em respostas ambíguas.",
-      "test": "tests/quality.test.ts - API autenticada na aba, identidade exata, timeout, regressão de frete e consistência do ZIP",
-      "evidence": "Quality Gate run 31553194133 PASS: TypeScript, 13/13 testes, build e audit crítico. Teste real do link 2gAFhInhqM com a versão 1.0.11 ainda pendente.",
+      "fix": "A extensão 1.0.12 abre a aba Shopee ativamente, limita carregamento a 12 s, compartilha orçamento de 8 s entre consultas da API e limita o fallback visual a 8 tentativas de 450 ms; o fluxo fica abaixo do timeout de 35 s do app.",
+      "test": "tests/quality.test.ts - identidade Shopee, timeout compartilhado, aba ativa, orçamento total e consistência do ZIP",
+      "evidence": "Quality Gate run 31554230193 PASS: TypeScript, 14/14 testes, build e audit crítico. Teste real com 1.0.12 pendente.",
       "iterationClosed": null
     },
     {
@@ -335,6 +335,14 @@
       "verdict": "REJECTED",
       "commit": "dce36dc5fd199a092044fd7f58c13d7c919913be",
       "note": "Score mantido no último valor confirmado pelo juiz. CI 13/13 passou; preço Shopee real, E2E WhatsApp e tracking ainda pendentes."
+    },
+    {
+      "iteration": 3,
+      "phase": "CI",
+      "score": 73,
+      "verdict": "REJECTED",
+      "commit": "981fccf64f4199b6dcaea2ec00ada803314a2919",
+      "note": "CI 14/14 passou. Score não foi elevado sem o teste real Shopee e o E2E WhatsApp."
     }
   ],
   "changes": [
@@ -381,6 +389,14 @@
     {
       "iteration": 2,
       "description": "Pacote baixável 1.0.11 sincronizado e validado por 13 testes automatizados."
+    },
+    {
+      "iteration": 3,
+      "description": "Extensão 1.0.12 corrige corrida entre timeout do app e captura, abre aba Shopee ativamente e fecha automaticamente."
+    },
+    {
+      "iteration": 3,
+      "description": "Preço pendente passou a ser exibido como aviso visual, não sucesso."
     }
   ],
   "decisions": [
@@ -413,6 +429,12 @@
       "iteration": 2,
       "decision": "Não aprovar o fluxo Shopee apenas pelo CI; exigir recaptura do link real com a extensão 1.0.11.",
       "reason": "O teste da versão 1.0.10 falhou com segurança em Preço pendente, e a API privada da Shopee pode variar por sessão, CEP e proteção anti-bot."
+    },
+    {
+      "id": "DEC-006",
+      "iteration": 3,
+      "decision": "Usar aba Shopee ativa durante a captura.",
+      "reason": "O Chrome desacelera abas ocultas e o teste real da versão 1.0.11 ultrapassou 35 segundos sem preço."
     }
   ],
   "blockedItems": [
@@ -437,21 +459,21 @@
     {
       "id": "BLOCK-003",
       "issueId": "AFF-SHOPEE-001",
-      "dependency": "Página real do produto Shopee fornecido, com extensão 1.0.11.",
-      "attempts": 1,
+      "dependency": "Página real do produto Shopee fornecido, com extensão 1.0.12.",
+      "attempts": 2,
       "status": "PENDING_REAL_BROWSER",
       "impactOnScore": 4,
-      "nextAction": "Instalar a extensão 1.0.11, excluir a captura antiga, recapturar https://s.shopee.com.br/2gAFhInhqM e confirmar o preço do produto (nunca frete R$ 9,62 nem Preço pendente)."
+      "nextAction": "Instalar 1.0.12, excluir a captura pendente, recapturar o mesmo link e verificar se a aba Shopee abre/fecha em menos de 35 s e retorna o preço correto."
     }
   ],
   "testSummary": {
-    "workflowRun": 31553194133,
-    "commit": "dce36dc5fd199a092044fd7f58c13d7c919913be",
+    "workflowRun": 31554230193,
+    "commit": "981fccf64f4199b6dcaea2ec00ada803314a2919",
     "ciStatus": "PASS",
     "automatedTests": {
-      "passed": 13,
+      "passed": 14,
       "failed": 0,
-      "total": 13
+      "total": 14
     },
     "typeScript": "PASS",
     "build": "PASS",
@@ -495,6 +517,16 @@
       "event": "REAL_SHOPEE_V1_0_10",
       "result": "Preço pendente; frete R$ 9,62 não foi publicado.",
       "decision": "Criar a extensão 1.0.11 com API autenticada da aba e manter o gate real pendente."
+    },
+    {
+      "event": "REAL_SHOPEE_V1_0_11",
+      "result": "Captura demorou mais que 35 segundos e terminou em Preço pendente.",
+      "decision": "Criar 1.0.12 com orçamento total menor e aba ativa."
+    },
+    {
+      "event": "CI_PASSED",
+      "run": 31554230193,
+      "result": "TypeScript, 14/14 testes, build e audit crítico PASS."
     }
   ]
 }

@@ -1,4 +1,4 @@
-# ML Afiliados Sender 1.0.11
+# ML Afiliados Sender 1.0.12
 
 Extensão oficial do Afiliados Pro para Chrome.
 
@@ -17,4 +17,4 @@ Extensão oficial do Afiliados Pro para Chrome.
 3. Ative o modo do desenvolvedor.
 4. Remova a versão anterior.
 5. Clique em **Carregar sem compactação**.
-6. Escolha a pasta extraída e confirme a versão **1.0.11**.
+6. Escolha a pasta extraída e confirme a versão **1.0.12**.
