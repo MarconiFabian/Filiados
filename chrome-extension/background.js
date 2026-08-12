@@ -336,6 +336,7 @@ async function captureShopeeApiFromTab(tabId) {
         '/api/v4/item/get?itemid=' + encodeURIComponent(ids.itemId) + '&shopid=' + encodeURIComponent(ids.shopId),
       ];
 
+      const apiSignal = AbortSignal.timeout(8_000);
       for (const endpoint of [...new Set(endpoints)]) {
         try {
           const headers = {
@@ -348,7 +349,7 @@ async function captureShopeeApiFromTab(tabId) {
             credentials: 'include',
             cache: 'no-store',
             headers,
-            signal: AbortSignal.timeout(7_000),
+            signal: apiSignal,
           });
           if (!response.ok || [401, 403, 418, 429].includes(response.status)) continue;
           if (!String(response.headers.get('content-type') || '').toLowerCase().includes('json')) continue;
@@ -410,16 +411,16 @@ async function captureShopeeProduct(url) {
   if (!isAllowedShopeeUrl(url)) throw new Error('Link da Shopee inválido.');
   let tabId = null;
   try {
-    const tab = await chrome.tabs.create({ url, active: false });
+    const tab = await chrome.tabs.create({ url, active: true });
     tabId = tab.id;
     if (!tabId) throw new Error('Não foi possível abrir a página da Shopee.');
-    await waitForTabComplete(tabId);
-    await sleep(1_200);
+    await waitForTabComplete(tabId, 12_000).catch(() => chrome.tabs.get(tabId));
+    await sleep(600);
 
     const apiProduct = await captureShopeeApiFromTab(tabId);
     if (apiProduct?.ok && apiProduct.price) return apiProduct;
 
-    for (let attempt = 0; attempt < 24; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       const [injection] = await chrome.scripting.executeScript({
         target: { tabId },
         world: 'ISOLATED',
@@ -536,7 +537,7 @@ async function captureShopeeProduct(url) {
       });
       const product = injection?.result;
       if (product?.price) return product;
-      await sleep(650);
+      await sleep(450);
     }
     throw new Error('O preço não apareceu na página da Shopee.');
   } finally {
