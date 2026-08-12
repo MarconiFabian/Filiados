@@ -118,7 +118,8 @@ test('captura Shopee termina antes do timeout do aplicativo', async () => {
   assert.match(background, /await sleep\(450\)/);
   assert.match(app, /captureTimeout = window\.setTimeout/);
   assert.match(app, /}, 35_000\)/);
-  assert.match(app, /toast\.warning\(shopeeCaptureWarning/);
+  assert.match(app, /toast\(shopeeCaptureWarning/);
+  assert.match(app, /icon: '⚠️'/);
 });
 
 test('app, fonte e pacote baixável usam a mesma versão da extensão', async () => {
