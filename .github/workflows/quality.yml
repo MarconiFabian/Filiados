@@ -32,6 +32,9 @@ jobs:
       - name: Production build
         id: build
         run: npm run build
+      - name: Full dependency audit evidence
+        continue-on-error: true
+        run: npm audit --json | tee quality-dependency-audit.json
       - name: Production dependency audit
         id: audit
         run: npm audit --omit=dev --audit-level=critical
@@ -51,4 +54,5 @@ jobs:
           path: |
             quality-artifacts/agent-state.json
             quality-tests.log
+            quality-dependency-audit.json
           retention-days: 90
