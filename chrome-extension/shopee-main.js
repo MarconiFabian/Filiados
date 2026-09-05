@@ -5,7 +5,7 @@
   const isProductEndpoint = (value) => {
     try {
       const url = new URL(String(value || ''), location.href);
-      return /\/api\/v4\/(?:pdp\/get_pc|item\/get)$/i.test(url.pathname);
+      return url.origin === location.origin && /\/api\/v4\/(?:pdp\/get_pc|item\/get)$/i.test(url.pathname);
     } catch {
       return false;
     }
@@ -25,23 +25,29 @@
     }
   };
 
-  const unwrapMoney = (value) => {
-    if (value && typeof value === 'object') {
-      return value.value ?? value.amount ?? value.single_value ?? null;
-    }
-    return value;
-  };
-
   const money = (value) => {
-    const unwrapped = unwrapMoney(value);
-    if (typeof unwrapped === 'string' && /[.,]/.test(unwrapped)) {
-      const parsed = Number(unwrapped.replace(/R\$\s*/gi, '').replace(/\s+/g, '').replace(/\./g, '').replace(',', '.'));
-      return Number.isFinite(parsed) && parsed > 0 && parsed <= 1000000 ? parsed : null;
+    const rawValue = value && typeof value === 'object'
+      ? (value.value ?? value.amount ?? value.single_value)
+      : value;
+    // Integer PDP fields are fixed-point (1 BRL = 100000 units).
+    // Explicit decimal strings are monetary values, never thousands guessed by size.
+    let parsed = null;
+    if (typeof rawValue === 'number' && Number.isSafeInteger(rawValue)) {
+      parsed = rawValue / 100000;
+    } else if (typeof rawValue === 'string') {
+      const text = rawValue.trim().replace(/^R\$\s*/, '');
+      if (/^\d+$/.test(text)) {
+        const units = Number(text);
+        if (Number.isSafeInteger(units)) parsed = units / 100000;
+      } else if (/^\d+\.\d{1,2}$/.test(text)) {
+        parsed = Number(text);
+      } else if (/^(?:\d+|\d{1,3}(?:\.\d{3})+),\d{1,2}$/.test(text)) {
+        parsed = Number(text.replace(/\./g, '').replace(',', '.'));
+      }
     }
-    const raw = Number(unwrapped);
-    if (!Number.isFinite(raw) || raw <= 0) return null;
-    const parsed = Number.isInteger(raw) && raw >= 100000 ? raw / 100000 : raw;
-    return Number.isFinite(parsed) && parsed > 0 && parsed <= 1000000 ? parsed : null;
+    return Number.isFinite(parsed) && parsed >= 0.01 && parsed <= 1000000
+      ? Math.round(parsed * 100) / 100
+      : null;
   };
 
   const firstMoney = (values) => {
@@ -80,7 +86,8 @@
       item.itemid ?? item.item_id ?? data.itemid ?? data.item_id ?? requestIds?.itemId ?? pageIds?.itemId ?? ''
     );
     if (!/^\d+$/.test(shopId) || !/^\d+$/.test(itemId)) return;
-    if (pageIds && (pageIds.shopId !== shopId || pageIds.itemId !== itemId)) return;
+    if (!pageIds || pageIds.shopId !== shopId || pageIds.itemId !== itemId) return;
+    if (requestIds && (requestIds.shopId !== shopId || requestIds.itemId !== itemId)) return;
 
     const currency = String(item.currency || data.currency || 'BRL').toUpperCase();
     if (currency !== 'BRL') return;
@@ -97,25 +104,25 @@
       : null;
 
     const price = firstMoney([
+      selectedModel?.price,
       productPrice.single_value,
       productPrice.range_min,
       productPrice.price_min,
-      selectedModel?.price,
       item.price_min,
       item.price,
     ]);
     if (price === null) return;
 
-    const priceMax = firstMoney([
+    const priceMax = selectedModel ? price : firstMoney([
       productPrice.range_max,
       productPrice.price_max,
       item.price_max,
     ]);
     const originalPrice = firstMoney([
+      selectedModel?.price_before_discount,
       productPrice.single_value_before_discount,
       productPrice.range_min_before_discount,
       productPrice.price_before_discount,
-      selectedModel?.price_before_discount,
       item.price_min_before_discount,
       item.price_before_discount,
     ]);

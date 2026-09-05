@@ -243,6 +243,7 @@ async function getSendHistory() {
 
 async function handleSendGuard(message, sender) {
   if (!isAllowedWhatsAppPage(sender)) throw new Error('A trava só pode ser usada no WhatsApp Web.');
+  if (!Number.isInteger(sender?.tab?.id)) throw new Error('A aba de envio não foi identificada.');
   if (!validFingerprint(message.fingerprint)) throw new Error('Identificador do anúncio inválido.');
 
   return withSendGuardLock(async () => {
@@ -270,6 +271,7 @@ async function handleSendGuard(message, sender) {
       await chrome.storage.local.set({
         [IN_FLIGHT_KEY]: {
           fingerprint,
+          tabId: sender.tab.id,
           queueId: String(message.queueId || ''),
           index: Number(message.index) || 0,
           label: String(message.label || ''),
@@ -286,6 +288,12 @@ async function handleSendGuard(message, sender) {
     }
 
     if (message.type === 'ML_SEND_GUARD_COMMIT') {
+      if (!inFlight || inFlight.fingerprint !== fingerprint ||
+          inFlight.tabId !== sender.tab.id ||
+          inFlight.queueId !== String(message.queueId || '') ||
+          inFlight.index !== (Number(message.index) || 0)) {
+        throw new Error('Confirmação sem a reserva correspondente. Confira a conversa antes de tentar novamente.');
+      }
       const sentAt = Date.now();
       history[fingerprint] = {
         sentAt,
@@ -358,17 +366,31 @@ async function captureShopeeApiFromTab(tabId) {
       if (!ids) return { ok: false, reason: 'product_ids_missing' };
 
       const money = (value) => {
-        if (typeof value === 'string' && /[.,]/.test(value)) {
-          const normalized = value.replace(/R\$\s*/gi, '').replace(/\s+/g, '').replace(/\./g, '').replace(',', '.');
-          const parsed = Number(normalized);
-          return Number.isFinite(parsed) && parsed > 0 && parsed <= 1000000 ? parsed : null;
+        const rawValue = value && typeof value === 'object'
+          ? (value.value ?? value.amount ?? value.single_value)
+          : value;
+        // Integer PDP fields are fixed-point (1 BRL = 100000 units).
+        // Explicit decimal strings are monetary values, never thousands guessed by size.
+        let parsed = null;
+        if (typeof rawValue === 'number' && Number.isSafeInteger(rawValue)) {
+          parsed = rawValue / 100000;
+        } else if (typeof rawValue === 'string') {
+          const text = rawValue.trim().replace(/^R\$\s*/, '');
+          if (/^\d+$/.test(text)) {
+            const units = Number(text);
+            if (Number.isSafeInteger(units)) parsed = units / 100000;
+          } else if (/^\d+\.\d{1,2}$/.test(text)) {
+            parsed = Number(text);
+          } else if (/^(?:\d+|\d{1,3}(?:\.\d{3})+),\d{1,2}$/.test(text)) {
+            parsed = Number(text.replace(/\./g, '').replace(',', '.'));
+          }
         }
-        const raw = Number(value);
-        if (!Number.isFinite(raw) || raw <= 0) return null;
-        const parsed = Number.isInteger(raw) && raw >= 100000 ? raw / 100000 : raw;
-        return Number.isFinite(parsed) && parsed > 0 && parsed <= 1000000 ? parsed : null;
+        return Number.isFinite(parsed) && parsed >= 0.01 && parsed <= 1000000
+          ? Math.round(parsed * 100) / 100
+          : null;
       };
-      const firstMoney = (values) => {
+    
+          const firstMoney = (values) => {
         for (const value of values) {
           const parsed = money(value);
           if (parsed !== null) return parsed;

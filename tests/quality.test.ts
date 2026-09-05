@@ -227,20 +227,20 @@ test('app, fonte e pacote baixável usam a mesma versão da extensão', async ()
   const [app, manifestText, archiveText] = await Promise.all([
     readFile('src/App.tsx', 'utf8'),
     readFile('chrome-extension/manifest.json', 'utf8'),
-    readFile('public/ml-afiliados-sender-v1.0.14.zip.b64', 'utf8'),
+    readFile('public/ml-afiliados-sender-v1.0.15.zip.b64', 'utf8'),
   ]);
   const manifest = JSON.parse(manifestText);
   const zip = Buffer.from(archiveText.replace(/\s+/g, ''), 'base64');
   const packagedManifest = JSON.parse(extractStoredEntry(zip, 'manifest.json'));
 
-  assert.equal(manifest.version, '1.0.14');
+  assert.equal(manifest.version, '1.0.15');
   assert.equal(packagedManifest.version, manifest.version);
-  assert.match(app, /REQUIRED_EXTENSION_VERSION = '1\.0\.14'/);
-  assert.match(app, /ml-afiliados-sender-v1\.0\.14\.zip\.b64/);
+  assert.match(app, /REQUIRED_EXTENSION_VERSION = '1\.0\.15'/);
+  assert.match(app, /ml-afiliados-sender-v1\.0\.15\.zip\.b64/);
 });
 
 test('pacote mantém a proteção persistente contra anúncios duplicados', async () => {
-  const archiveText = await readFile('public/ml-afiliados-sender-v1.0.14.zip.b64', 'utf8');
+  const archiveText = await readFile('public/ml-afiliados-sender-v1.0.15.zip.b64', 'utf8');
   const background = extractStoredEntry(Buffer.from(archiveText.replace(/\s+/g, ''), 'base64'), 'background.js');
   const whatsapp = extractStoredEntry(Buffer.from(archiveText.replace(/\s+/g, ''), 'base64'), 'whatsapp.js');
 
