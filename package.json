@@ -16,7 +16,12 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
-    "check": "npm run lint && npm test && npm run build"
+    "check": "npm run lint && npm test && npm run build",
+    "quality:state": "node scripts/agent-state.mjs check",
+    "quality:refresh": "node scripts/agent-state.mjs refresh",
+    "quality:begin": "node scripts/agent-state.mjs begin",
+    "extension:package": "node scripts/package-extension.mjs",
+    "extension:check": "node scripts/package-extension.mjs --check"
   },
   "dependencies": {
     "@google/genai": "^2.16.0",

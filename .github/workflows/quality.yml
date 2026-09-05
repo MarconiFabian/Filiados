@@ -19,11 +19,40 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Persistent audit state integrity
+        run: npm run quality:state
+      - name: Extension package matches every source file
+        run: npm run extension:check
       - name: TypeScript
+        id: types
         run: npm run lint
       - name: Regression tests
-        run: npm test
+        id: tests
+        run: npm test 2>&1 | tee quality-tests.log
       - name: Production build
+        id: build
         run: npm run build
+      - name: Full dependency audit evidence
+        continue-on-error: true
+        run: npm audit --json | tee quality-dependency-audit.json
       - name: Production dependency audit
+        id: audit
         run: npm audit --omit=dev --audit-level=critical
+      - name: Save audit snapshot even on failure
+        if: always()
+        env:
+          TYPECHECK_OUTCOME: ${{ steps.types.outcome }}
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
+        run: node scripts/agent-state.mjs ci
+      - name: Preserve iteration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-state-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            quality-artifacts/agent-state.json
+            quality-tests.log
+            quality-dependency-audit.json
+          retention-days: 90

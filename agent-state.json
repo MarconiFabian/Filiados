@@ -1,17 +1,17 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "project": {
     "name": "Afiliados Pro",
     "repository": "MarconiFabian/Filiados",
     "version": "3.0.0",
-    "extensionVersion": "1.0.14",
-    "branch": "codex/shopee-passive-price-v1014-20260812",
+    "extensionVersion": "1.0.15",
+    "branch": "codex/audit-persistence-20260905",
     "environment": "pull-request",
-    "commitUnderTest": "6785dd50256a6fe514a53fb4474d74df9b5d2cec"
+    "commitUnderTest": "bb0083d7a4e6e4e26ddf88e254caf9310a8c8f20"
   },
-  "iteration": 5,
+  "iteration": 6,
   "status": "IN_PROGRESS",
-  "updatedAt": "2026-08-12T06:40:00-03:00",
+  "updatedAt": "2026-09-05T21:27:52.842Z",
   "marketplaces": [
     "mercado-livre",
     "amazon",
@@ -20,17 +20,19 @@
   ],
   "qualityGate": {
     "verdict": "REJECTED",
-    "judge": "PENDING_ITERATION_2_INDEPENDENT_REVIEW",
     "requiredScore": 90,
-    "currentScore": 73,
-    "provisional": false,
-    "openP0": 0,
-    "openP1": 1,
+    "currentScore": null,
+    "scoreStatus": "PENDING_REVIEW",
+    "openP0": 1,
+    "openP1": 8,
+    "openP2": 2,
+    "openP3": 0,
     "criticalSecurity": 0,
+    "criticalRegressions": 0,
     "criticalTests": {
-      "passed": 6,
-      "total": 8,
-      "percent": 75,
+      "passed": 0,
+      "total": 10,
+      "percent": 0,
       "status": "FAIL"
     },
     "criticalFlows": {
@@ -39,14 +41,13 @@
       "percent": 0,
       "status": "FAIL"
     },
-    "criticalRegressions": 0,
     "gates": {
       "scoreAtLeast90": "FAIL",
-      "noOpenP0": "PASS",
-      "noCriticalSecurity": "PASS",
+      "noOpenP0": "FAIL",
+      "noCriticalSecurity": "FAIL",
       "allCriticalTests": "FAIL",
       "allCriticalFlows": "FAIL",
-      "noCriticalRegressions": "PASS"
+      "noCriticalRegressions": "FAIL"
     }
   },
   "issues": [
@@ -217,6 +218,55 @@
       "fix": "Allowlist de campos, tipos, limites, marketplace e validação também em update de users.",
       "test": "tests/quality.test.ts - regras estritas",
       "evidence": "Quality Gate run 31545907589 PASS."
+    },
+    {
+      "id": "AFF-MONEY-002",
+      "category": "AFFILIATE",
+      "title": "49.99 vira 4999 e preço inferior a R$1 usa escala incorreta",
+      "severity": "P1",
+      "status": "IMPLEMENTED_PENDING_CI",
+      "file": "chrome-extension/shopee-main.js; chrome-extension/background.js",
+      "iterationCreated": 6,
+      "ownerAgent": "ORCHESTRATOR",
+      "rootCause": "Remoção incondicional de pontos e heurística de escala >=100000.",
+      "fix": "Formato decimal explícito e escala fixa para inteiros de PDP.",
+      "test": "tests/extension-behavior.test.ts"
+    },
+    {
+      "id": "REL-RESERVE-002",
+      "category": "RELIABILITY",
+      "title": "Confirmação sem reserva correspondente pode apagar outro envio em andamento",
+      "severity": "P1",
+      "status": "IMPLEMENTED_PENDING_CI",
+      "file": "chrome-extension/background.js",
+      "iterationCreated": 6,
+      "ownerAgent": "ORCHESTRATOR",
+      "fix": "Validar fingerprint, aba, fila e índice antes do COMMIT.",
+      "test": "tests/extension-behavior.test.ts"
+    },
+    {
+      "id": "AUDIT-001",
+      "category": "QA",
+      "title": "Estado exibe zero P0 enquanto validação crítica está pendente",
+      "severity": "P1",
+      "status": "IMPLEMENTED_PENDING_CI",
+      "file": "agent-state.json",
+      "iterationCreated": 6,
+      "ownerAgent": "ORCHESTRATOR",
+      "fix": "Gate calculado, evidências por commit, histórico imutável e snapshots CI.",
+      "test": "tests/agent-state.test.ts"
+    },
+    {
+      "id": "AFF-RANGE-003",
+      "category": "AFFILIATE",
+      "title": "App descarta limite máximo da faixa de preço Shopee",
+      "severity": "P1",
+      "status": "OPEN",
+      "file": "src/App.tsx",
+      "iterationCreated": 6,
+      "ownerAgent": "ORCHESTRATOR",
+      "impact": "Uma faixa pode ser anunciada como valor único sem confirmação da variante.",
+      "nextAction": "Persistir a faixa e exigir revisão de variante antes do envio."
     }
   ],
   "tests": [
@@ -225,54 +275,66 @@
       "level": 1,
       "name": "TypeScript noEmit",
       "command": "npm run lint",
-      "status": "PASS",
+      "status": "PENDING",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31553194133"
+      "evidence": "GitHub Actions Quality Gate run 31553194133",
+      "automation": "lint",
+      "previousEvidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-UNIT-001",
       "level": 2,
       "name": "Preço Shopee via API autenticada da aba, IDs exatos e URL segura",
       "command": "npm test",
-      "status": "PASS",
+      "status": "PENDING",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31553194133"
+      "evidence": "GitHub Actions Quality Gate run 31553194133",
+      "automation": "test",
+      "previousEvidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-REG-001",
       "level": 2,
       "name": "Não escolher frete como preço",
       "command": "npm test",
-      "status": "PASS",
+      "status": "PENDING",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31553194133"
+      "evidence": "GitHub Actions Quality Gate run 31553194133",
+      "automation": "test",
+      "previousEvidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-REG-002",
       "level": 2,
       "name": "Versão app/fonte/ZIP consistente",
       "command": "npm test",
-      "status": "PASS",
+      "status": "PENDING",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31553194133"
+      "evidence": "GitHub Actions Quality Gate run 31553194133",
+      "automation": "test",
+      "previousEvidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-REG-003",
       "level": 2,
       "name": "Trava persistente de duplicidade presente no pacote",
       "command": "npm test",
-      "status": "PASS",
+      "status": "PENDING",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31553194133"
+      "evidence": "GitHub Actions Quality Gate run 31553194133",
+      "automation": "test",
+      "previousEvidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-BUILD-001",
       "level": 1,
       "name": "Build de produção Vite",
       "command": "npm run build",
-      "status": "PASS",
+      "status": "PENDING",
       "critical": true,
-      "evidence": "GitHub Actions Quality Gate run 31553194133"
+      "evidence": "GitHub Actions Quality Gate run 31553194133",
+      "automation": "build",
+      "previousEvidence": "GitHub Actions Quality Gate run 31553194133"
     },
     {
       "id": "TEST-E2E-001",
@@ -287,6 +349,22 @@
       "name": "Links e tracking dos quatro marketplaces",
       "status": "PENDING_EXTERNAL_VALIDATION",
       "critical": true
+    },
+    {
+      "id": "TEST-BEHAVIOR-006",
+      "name": "Normalização Shopee, concorrência e propriedade da reserva",
+      "critical": true,
+      "status": "PENDING",
+      "automation": "test",
+      "command": "npm test"
+    },
+    {
+      "id": "TEST-STATE-006",
+      "name": "Persistência e gates sem autoaprovação",
+      "critical": true,
+      "status": "PENDING",
+      "automation": "test",
+      "command": "npm test"
     }
   ],
   "criticalFlows": [
@@ -359,6 +437,13 @@
       "verdict": "REJECTED",
       "commit": "6785dd50256a6fe514a53fb4474d74df9b5d2cec",
       "note": "CI 18/18 passou com execução do observador moderno. Score permanece até E2E real."
+    },
+    {
+      "iteration": 6,
+      "phase": "DISCOVERY",
+      "score": null,
+      "verdict": "REJECTED",
+      "note": "Nova avaliação pendente. Histórico 73/100 preservado."
     }
   ],
   "changes": [
@@ -429,6 +514,14 @@
     {
       "iteration": 5,
       "description": "Aplicativo bloqueia preview não autorizado com mensagem para usar o domínio oficial."
+    },
+    {
+      "iteration": 6,
+      "description": "Persistência com lock/gravação atômica, validação de histórico, contagem derivada de pendências e snapshots de CI."
+    },
+    {
+      "iteration": 6,
+      "description": "Correções de preço decimal, confirmação por aba/fila/produto, versão candidata 1.0.15 e pacote reproduzível."
     }
   ],
   "decisions": [
@@ -479,6 +572,12 @@
       "iteration": 5,
       "decision": "Substituir segunda requisição como caminho principal pela observação passiva da resposta da página.",
       "reason": "Pesquisa multiagente identificou tokens anti-bot e schema moderno; reutilizar a resposta já obtida é mais rápido e não envia cookies."
+    },
+    {
+      "id": "DEC-009",
+      "iteration": 6,
+      "decision": "Manter histórico anterior integral; score atual nulo até nova avaliação documentada.",
+      "reason": "CI e verificações de texto não comprovam fluxos reais nem justificam uma nova nota."
     }
   ],
   "blockedItems": [
@@ -494,7 +593,7 @@
     {
       "id": "BLOCK-002",
       "issueId": "TEST-E2E-001",
-      "dependency": "Chrome com a extensão 1.0.11 carregada e sessão real do WhatsApp Web.",
+      "dependency": "Chrome com extensão atual carregada e conversa de teste autorizada no WhatsApp Web.",
       "attempts": 0,
       "status": "PENDING_REAL_BROWSER",
       "impactOnScore": 7,
@@ -505,9 +604,21 @@
       "issueId": "AFF-SHOPEE-001",
       "dependency": "Página real Shopee no domínio oficial do app, com extensão 1.0.14.",
       "attempts": 4,
-      "status": "PENDING_REAL_BROWSER",
+      "status": "BLOCKED",
       "impactOnScore": 4,
-      "nextAction": "Instalar 1.0.14 e recapturar no app oficial; confirmar retorno 49,99–79,99 sem segunda chamada lenta."
+      "nextAction": "Validar captura real com Chrome e resposta do produto; não há prova de sucesso real da 1.0.14."
+    },
+    {
+      "id": "BLOCK-LOCAL-006",
+      "dependency": "Terminal local não inicia: helper_unknown_error apply deny-read ACLs.",
+      "status": "BLOCKED",
+      "nextAction": "Continuar validação por GitHub Actions; Chrome E2E precisa de ambiente de execução disponível."
+    },
+    {
+      "id": "BLOCK-JUDGE-006",
+      "dependency": "Agente independente excedeu limite de uso.",
+      "status": "BLOCKED",
+      "nextAction": "Revisão independente antes de aprovação final."
     }
   ],
   "testSummary": {
@@ -596,6 +707,117 @@
       "event": "CI_PASSED",
       "run": 31583345957,
       "result": "TypeScript, 18/18 testes, build e audit crítico PASS."
+    },
+    {
+      "id": "AUDIT-STATE-6",
+      "event": "AUDIT_STATE_INCONSISTENCY",
+      "iteration": 6,
+      "previousQualityGate": {
+        "verdict": "REJECTED",
+        "judge": "PENDING_ITERATION_2_INDEPENDENT_REVIEW",
+        "requiredScore": 90,
+        "currentScore": 73,
+        "provisional": false,
+        "openP0": 0,
+        "openP1": 1,
+        "criticalSecurity": 0,
+        "criticalTests": {
+          "passed": 6,
+          "total": 8,
+          "percent": 75,
+          "status": "FAIL"
+        },
+        "criticalFlows": {
+          "passed": 0,
+          "total": 3,
+          "percent": 0,
+          "status": "FAIL"
+        },
+        "criticalRegressions": 0,
+        "gates": {
+          "scoreAtLeast90": "FAIL",
+          "noOpenP0": "PASS",
+          "noCriticalSecurity": "PASS",
+          "allCriticalTests": "FAIL",
+          "allCriticalFlows": "FAIL",
+          "noCriticalRegressions": "PASS"
+        }
+      },
+      "decision": "Contadores calculados a partir das issues; aprovação exige evidência do commit atual."
+    }
+  ],
+  "assessment": {
+    "status": "PENDING",
+    "reason": "Revisão independente desta rodada indisponível por limite de uso; 73 é somente a última nota histórica."
+  },
+  "securityFindings": [],
+  "regressions": [],
+  "securityReview": {
+    "status": "PENDING",
+    "reason": "Auditoria de dependências não equivale à revisão de segurança completa."
+  },
+  "regressionReview": {
+    "status": "PENDING",
+    "reason": "Fluxos reais Chrome/WhatsApp ainda sem execução nesta rodada."
+  },
+  "testRuns": [
+    {
+      "id": "CI-HISTORICAL-31583345957",
+      "workflowRun": 31583345957,
+      "commit": "6785dd50256a6fe514a53fb4474d74df9b5d2cec",
+      "ciStatus": "PASS",
+      "automatedTests": {
+        "passed": 18,
+        "failed": 0,
+        "total": 18
+      },
+      "typeScript": "PASS",
+      "build": "PASS",
+      "criticalAudit": "PASS",
+      "criticalGateTests": {
+        "passed": 7,
+        "total": 9,
+        "percent": 77.78
+      }
+    }
+  ],
+  "iterations": [
+    {
+      "id": "ITER-1",
+      "iteration": 1,
+      "status": "HISTORICAL",
+      "evidence": "scoreHistory e auditTrail preservados"
+    },
+    {
+      "id": "ITER-2",
+      "iteration": 2,
+      "status": "HISTORICAL",
+      "evidence": "scoreHistory e auditTrail preservados"
+    },
+    {
+      "id": "ITER-3",
+      "iteration": 3,
+      "status": "HISTORICAL",
+      "evidence": "scoreHistory e auditTrail preservados"
+    },
+    {
+      "id": "ITER-4",
+      "iteration": 4,
+      "status": "HISTORICAL",
+      "evidence": "scoreHistory e auditTrail preservados"
+    },
+    {
+      "id": "ITER-5",
+      "iteration": 5,
+      "status": "HISTORICAL",
+      "evidence": "scoreHistory e auditTrail preservados"
+    },
+    {
+      "id": "ITER-6",
+      "iteration": 6,
+      "status": "IN_PROGRESS",
+      "startedAt": "2026-09-05T21:27:52.842Z",
+      "description": "Integridade do histórico, testes de comportamento, normalização de preço e propriedade da reserva de envio."
     }
   ]
 }
